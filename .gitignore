@@ -6,6 +6,20 @@ __pycache__/
 # C extensions
 *.so
 
+# Operating System generated files #
+##################################
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# 忽略 .vscode 文件夹
+.vscode/
+
 # Distribution / packaging
 .Python
 build/
@@ -25,6 +39,9 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+
+# Requirements file (if using pyproject.toml and a lock file like uv.lock)
+requirements.txt
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -130,6 +147,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.conda-env
 env/
 venv/
 ENV/

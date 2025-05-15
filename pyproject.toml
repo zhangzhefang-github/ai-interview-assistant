@@ -1,0 +1,45 @@
+[project]
+name = "ai-interview-assistant"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.100.0",
+    "uvicorn[standard]>=0.20.0",
+    "sqlalchemy>=2.0.0",
+    "python-dotenv>=1.0.0",
+    "pydantic-settings>=2.0.0",
+    "pydantic[email]>=2.0.0",
+    "streamlit>=1.30.0",
+    "langchain==0.3.25",
+    "tiktoken>=0.4.0",
+    "anyio>=3.4.0,<4.0.0",
+    "pymysql>=1.0.0",
+    "langchain-openai>=0.1.0",
+    "python-multipart>=0.0.5",
+    "python-docx>=1.1.0",
+    "pymupdf>=1.23.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."] # Look in the current directory
+include = ["app*", "streamlit_app*"]  # Include 'app' and 'streamlit_app' and their submodules
+exclude = ["tests*", "docs*"] # Exclude tests and docs if you have them
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "httpx",
+    "pytest-asyncio",
+    # "pytest-cov", # Optional: for test coverage
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict" # or "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Add other pytest configurations here if needed, e.g. markers
+# markers = [
+#     "slow: marks tests as slow to run",
+#     "integration: marks integration tests",
+# ]
