@@ -2,6 +2,7 @@ print("DEBUG_INTERVIEWS: interviews.py MODULE EXECUTION STARTED") # THIS IS A VE
 import logging
 from typing import List, Any, Optional
 import re # Added for robust question parsing
+import json # Added for JSON parsing
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload # Import joinedload
@@ -242,108 +243,172 @@ async def generate_questions_for_interview_endpoint( # Renamed to avoid conflict
 
     return db_interview
 
+@router.post("/{interview_id}/logs", response_model=schemas.InterviewLog, status_code=status.HTTP_201_CREATED)
+def create_interview_log_entry(
+    interview_id: int,
+    log_in: schemas.InterviewLogCreate,
+    db: Session = Depends(get_db)
+) -> models.InterviewLog:
+    db_interview = db.query(models.Interview).filter(models.Interview.id == interview_id).first()
+    if not db_interview:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interview not found")
+
+    # Potentially validate question_id if provided
+    if log_in.question_id:
+        db_question = db.query(models.Question).filter(models.Question.id == log_in.question_id, models.Question.interview_id == interview_id).first()
+        if not db_question:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, 
+                                detail=f"Question with id {log_in.question_id} not found for this interview.")
+        # If question_text_snapshot is not provided but question_id is, populate it from the question
+        if not log_in.question_text_snapshot and db_question:
+            log_in.question_text_snapshot = db_question.question_text
+
+    if not log_in.question_text_snapshot and not log_in.question_id:
+         # Or decide if question_text_snapshot can be truly optional
+        logger.warning(f"Creating InterviewLog for interview {interview_id} without explicit question text or ID.")
+
+
+    db_log = models.InterviewLog(**log_in.model_dump(), interview_id=interview_id)
+    db.add(db_log)
+    db.commit()
+    db.refresh(db_log)
+    logger.info(f"InterviewLog entry created with id {db_log.id} for interview {interview_id}")
+    return db_log
+
+@router.get("/{interview_id}/logs", response_model=List[schemas.InterviewLog])
+def get_interview_log_entries(
+    interview_id: int,
+    db: Session = Depends(get_db)
+) -> List[models.InterviewLog]:
+    db_interview = db.query(models.Interview).options(joinedload(models.Interview.logs)).filter(models.Interview.id == interview_id).first()
+    if not db_interview:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interview not found")
+    
+    # Logs are already ordered by order_num due to the relationship's order_by config
+    return db_interview.logs
+
 @router.post("/{interview_id}/generate-report", response_model=schemas.Report)
 async def trigger_generate_interview_report(
     interview_id: int,
     db: Session = Depends(get_db)
 ) -> Any: # Changed to Any temporarily as db_report is a SQLAlchemy model
-    """
-    Generates (or re-generates) an AI assessment report for a given interview.
-    For MVP, this is a synchronous operation.
-    """
-    # Eagerly load related job and candidate to avoid multiple queries if not already loaded
-    # and to ensure their data is available for the report.
+    logger.info(f"Triggering report generation for interview ID: {interview_id}")
+    # Use joinedload to fetch related job, candidate, and logs efficiently
     db_interview = (
         db.query(models.Interview)
         .options(
-            joinedload(models.Interview.job), 
+            joinedload(models.Interview.job),
             joinedload(models.Interview.candidate),
-            joinedload(models.Interview.logs) # Eager load logs as well
+            joinedload(models.Interview.logs) # Eagerly load logs
         )
         .filter(models.Interview.id == interview_id)
         .first()
     )
 
     if not db_interview:
+        logger.warning(f"Interview not found for ID: {interview_id} when generating report.")
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Interview not found")
 
-    # dialogue_logs_query = (
-    #     db.query(models.InterviewLog) # This query is now implicitly handled by db_interview.logs if eager loaded
-    #     .filter(models.InterviewLog.interview_id == interview_id)
-    #     .order_by(models.InterviewLog.order_num) 
-    # )
-    # dialogue_logs = dialogue_logs_query.all()
-    
-    dialogue_logs = db_interview.logs # Access eagerly loaded logs
+    if not db_interview.job or not db_interview.job.description:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Job description not available for this interview.")
+    if not db_interview.candidate or not db_interview.candidate.resume_text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Candidate resume not available for this interview.")
 
-    if not dialogue_logs:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No dialogue logs found for this interview. Cannot generate report.")
-
-    interview_dialogues_texts = [log.full_dialogue_text for log in dialogue_logs if log.full_dialogue_text]
-    if not interview_dialogues_texts:
-         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dialogue logs exist but contain no text. Cannot generate report.")
-
-    job_description = "Job description not available."
-    if db_interview.job and db_interview.job.description:
-        job_description = db_interview.job.description
+    # --- Construct dialogue string from structured logs ---
+    dialogue_parts = []
+    if db_interview.logs: # Check if logs exist and are loaded
+        # Logs should be ordered by order_num due to relationship config
+        for i, log_entry in enumerate(db_interview.logs):
+            question_text = log_entry.question_text_snapshot or "(Ad-hoc Question)" 
+            answer_text = log_entry.full_dialogue_text or "(No answer recorded)"
+            dialogue_parts.append(f"Q{i+1}: {question_text}\nA{i+1}: {answer_text}")
+        formatted_dialogue = "\n\n".join(dialogue_parts)
+        logger.info(f"Using structured logs for report generation for interview {interview_id}. Dialogue length: {len(formatted_dialogue)}")
+    elif db_interview.conversation_log: # Fallback to old field if no structured logs (should be phased out)
+        formatted_dialogue = db_interview.conversation_log
+        logger.warning(f"Interview {interview_id}: No structured logs found. Falling back to conversation_log field for report generation.")
     else:
-        logger.warning(f"Job or Job description not found for interview {interview_id}")
-    
-    candidate_resume = "Candidate resume not available."
-    if db_interview.candidate and db_interview.candidate.resume_text:
-        candidate_resume = db_interview.candidate.resume_text
+        logger.error(f"Interview {interview_id}: No interview logs (structured or fallback) found. Cannot generate report.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid interview conversation log found to generate report.")
+    # ---
+
+    if not formatted_dialogue.strip():
+        logger.error(f"Interview {interview_id}: Formatted dialogue is empty. Cannot generate report.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Interview conversation log is empty.")
+
+    logger.info(f"Calling AI service to generate report for interview ID: {interview_id} using processed dialogue input.")
+    try:
+        # The generate_interview_report service should handle the actual AI call and prompt formatting.
+        # It expects job_description, candidate_resume, and the full_dialogue_string.
+        generated_report_text = await generate_interview_report(
+            job_description=db_interview.job.description,
+            candidate_resume=db_interview.candidate.resume_text,
+            full_dialogue_string=formatted_dialogue # Pass the constructed dialogue string
+        )
+        logger.info(f"Successfully generated interview report text for interview {interview_id}.")
+
+    except Exception as e:
+        logger.error(f"AI service failed to generate report for interview {interview_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"AI service failed: {str(e)}")
+
+    # --- Process and save the report --- 
+    radar_scores_json = None
+    text_report_content = generated_report_text
+
+    # Attempt to extract JSON and then remove it from the text report
+    try:
+        extracted_json_data = extract_capability_assessment_json(generated_report_text)
+        if extracted_json_data:
+            radar_scores_json = extracted_json_data # This is already a dict
+            # Remove the JSON block from the text report for cleaner display
+            # This regex should match the ```json ... ``` block
+            json_block_pattern = r"```json\s*\{\s*\"CANDIDATE_CAPABILITY_ASSESSMENT_JSON\"\s*:\s*\{.*?\}\s*\}\s*```"
+            text_report_content = re.sub(json_block_pattern, "", generated_report_text, flags=re.DOTALL).strip()
+            logger.info(f"Successfully parsed radar_data for interview {interview_id}: {radar_scores_json}")
+            logger.info(f"Removed JSON block from text_report_content for interview {interview_id}.")
+        else:
+            logger.warning(f"Could not extract CANDIDATE_CAPABILITY_ASSESSMENT_JSON from report for interview {interview_id}. Radar data will be empty.")
+    except json.JSONDecodeError as e:
+        logger.error(f"JSONDecodeError parsing radar_data for interview {interview_id}: {e}. Raw text was: {generated_report_text[:500]}...", exc_info=True)
+        # Keep text_report_content as is, radar_scores_json remains None
+    except Exception as e: # Catch any other unexpected error during extraction/removal
+        logger.error(f"Unexpected error extracting/removing JSON for interview {interview_id}: {e}. Raw text was: {generated_report_text[:500]}...", exc_info=True)
+
+    # Update the Interview model with the radar_data
+    if radar_scores_json:
+        db_interview.radar_data = radar_scores_json # SQLAlchemy handles JSON conversion
     else:
-        logger.warning(f"Candidate or Candidate resume not found for interview {interview_id}")
-
-    logger.info(f"Calling AI service to generate report for interview ID: {interview_id}")
-    
-    # Assuming generate_interview_report is an async function if we keep the endpoint async
-    # If generate_interview_report is synchronous, the endpoint doesn't strictly need to be async unless other awaitables are used.
-    # For now, assuming ai_report_generator.py's function is synchronous as per previous edits.
-    generated_report_text = generate_interview_report( # This is a synchronous call based on ai_report_generator.py
-        interview_dialogues=interview_dialogues_texts,
-        job_description=job_description,
-        candidate_resume=candidate_resume
-    )
-
-    if generated_report_text.startswith("Error:"):
-        logger.error(f"AI service failed to generate report for interview {interview_id}: {generated_report_text}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=generated_report_text)
+        db_interview.radar_data = None # Ensure it's cleared if not found
 
     # Check if a report already exists for this interview
-    db_report = db_interview.generated_report # Access via relationship
+    db_report = db.query(models.Report).filter(models.Report.interview_id == interview_id).first()
 
     if db_report:
         logger.info(f"Updating existing report for interview ID: {interview_id}")
-        db_report.generated_text = generated_report_text
-        db_report.updated_at = func.now() # Explicitly set updated_at for existing report if your model doesn't auto-update it on every change
+        db_report.generated_text = text_report_content # Save the cleaned text
+        db_report.updated_at = func.now() # Explicitly set for MariaDB/older MySQL if onupdate not reliable via ORM only on Base
     else:
         logger.info(f"Creating new report for interview ID: {interview_id}")
         db_report = models.Report(
-            interview_id=interview_id,
-            generated_text=generated_report_text
-            # created_at and updated_at will be handled by server_default/onupdate in the model
+            interview_id=interview_id, 
+            generated_text=text_report_content # Save the cleaned text
         )
         db.add(db_report)
-        # db_interview.generated_report = db_report # SQLAlchemy usually handles this back-population
-
-    # Use Enum member for status comparison and assignment
-    if db_interview.status != models.InterviewStatus.REPORT_GENERATED:
-        db_interview.status = models.InterviewStatus.REPORT_GENERATED
-        # db.add(db_interview) # Mark interview as dirty if status changed, SQLAlchemy usually tracks this.
     
+    db_interview.status = models.InterviewStatus.REPORT_GENERATED
+    db.add(db_interview) # Ensure interview is also updated (status and radar_data)
+
     try:
         db.commit()
-        db.refresh(db_report) # Refresh db_report to get ID, created_at, updated_at from DB
-        if db.is_modified(db_interview): # Check if interview was actually modified (e.g. status change)
-             db.refresh(db_interview)
+        db.refresh(db_report) # Refresh to get ID, created_at, updated_at
+        db.refresh(db_interview) # Refresh interview to get updated status and radar data in the object
     except Exception as e:
         db.rollback()
-        logger.error(f"Database error while saving report for interview {interview_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save the generated report to the database.")
-    
+        logger.error(f"Error committing report or interview update for interview {interview_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save report to database.")
+
     logger.info(f"Report generated and saved successfully for interview ID: {interview_id}")
-    return db_report # FastAPI will convert this to schemas.Report based on response_model
+    return db_report
 
 # Diagnostic log: To be executed when this module is imported.
 logger.debug("---- Routes registered in app.api.v1.endpoints.interviews.py router (minimal) ----")

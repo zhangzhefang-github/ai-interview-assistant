@@ -181,8 +181,12 @@ def show_report_generation_page():
         interview_details = None
         try:
             # get_interview_details should return job and candidate info nested within
-            interview_details = get_interview_details(selected_interview_id) 
-            st.session_state[f"report_text_{selected_interview_id}"] = interview_details.get("report")
+            interview_details = get_interview_details(selected_interview_id)
+            report_data = interview_details.get("generated_report") # Get the nested Report object
+            if report_data and isinstance(report_data, dict):
+                st.session_state[f"report_text_{selected_interview_id}"] = report_data.get("generated_text")
+            else:
+                st.session_state[f"report_text_{selected_interview_id}"] = None
             st.session_state[f"report_error_{selected_interview_id}"] = None # Clear previous error
         except APIError as e:
             st.error(f"获取面试详情失败：{e.details or e.message}")
@@ -266,7 +270,7 @@ def show_report_generation_page():
                     try:
                         logger.info(f"Calling generate_report_for_interview_api for interview ID: {selected_interview_id}")
                         api_response = generate_report_for_interview_api(selected_interview_id)
-                        updated_report = api_response.get("report") 
+                        updated_report = api_response.get("generated_text")
                         st.session_state[f"report_text_{selected_interview_id}"] = updated_report
                         # Update status in session state from API response if it's part of it
                         # For now, assume generate_report_for_interview_api returns the full interview object

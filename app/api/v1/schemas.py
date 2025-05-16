@@ -86,18 +86,17 @@ class ReportUpdate(BaseModel):
 # --- InterviewLog Schemas (forward declaration for Interview) ---
 class InterviewLogBase(BaseModel):
     order_num: Optional[int] = None
-    question_text: Optional[str] = None
-    answer_text: Optional[str] = None
-    full_dialogue_text: Optional[str] = None
+    question_text_snapshot: Optional[str] = None
+    full_dialogue_text: str
+    question_id: Optional[int] = None
 
 class InterviewLogCreate(InterviewLogBase):
-    pass # interview_id will be set programmatically
+    pass
 
 class InterviewLog(InterviewLogBase):
     id: int
     interview_id: int
     created_at: datetime
-    updated_at: datetime
     model_config = {"from_attributes": True}
 
 # --- Interview Schemas ---
@@ -113,11 +112,13 @@ class InterviewCreate(InterviewBase):
 class InterviewUpdate(BaseModel):
     scheduled_at: Optional[datetime] = None
     status: Optional[str] = None
+    conversation_log: Optional[str] = None # Added for interview logging
 
 class InterviewInDBBase(InterviewBase):
     id: int
     created_at: datetime
     updated_at: datetime
+    conversation_log: Optional[str] = None
     questions: List[Question] = [] 
     logs: List[InterviewLog] = []
     generated_report: Optional[Report] = None

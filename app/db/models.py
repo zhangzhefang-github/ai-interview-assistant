@@ -85,7 +85,7 @@ class Interview(Base):
     candidate_id = Column(Integer, ForeignKey("candidates.id"), nullable=False)
     scheduled_at = Column(DateTime, nullable=True)
     status = Column(DBEnum(InterviewStatus), nullable=False, default=InterviewStatus.PENDING_QUESTIONS)
-    # conversation_log = Column(Text, nullable=True) # REMOVED
+    conversation_log = Column(Text, nullable=True) # ADDED (or uncommented) for MVP single log
     # report = Column(Text, nullable=True) # REMOVED
     radar_data = Column(JSON, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())

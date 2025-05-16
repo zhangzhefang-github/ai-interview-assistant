@@ -127,8 +127,8 @@ def show_job_management_page():
             # Column names for header and data mapping key
             cols_config = {
                 "ID": 0.7,
-                "职位名称": 2.5,
-                "职位描述": 3.5,
+                "职位名称": 1.0,
+                "职位描述": 5.0,
                 "编辑": 1.0, # Placeholder for edit button
                 "删除": 1.0  # Placeholder for delete button
             }

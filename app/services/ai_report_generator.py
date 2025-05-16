@@ -21,39 +21,8 @@ from langchain.chains import LLMChain
 import logging
 logger = logging.getLogger(__name__)
 
-
-PROMPT_TEMPLATE = """
-You are a Senior HR Specialist and Technical Interviewer. Based on the provided interview dialogue, job description, and candidate resume, please generate a professional interview assessment report.
-
-**1. Job Description (JD):**
-{job_description}
-
-**2. Candidate Resume Summary:**
-{candidate_resume}
-
-**3. Interview Dialogue Records:**
----
-{interview_dialogues}
----
-
-**Please structure your report with the following sections:**
-
-**I. Summary of Candidate's Key Responses:**
-   - Briefly summarize the candidate's main points and information provided for key questions.
-
-**II. Preliminary Skills and Experience Assessment (against JD):**
-   - Based on the dialogue, assess the candidate's alignment with the skills and experience required in the JD.
-   - Highlight matching aspects and potential gaps.
-
-**III. Communication and Presentation Skills (Initial Impression):**
-   - Briefly comment on the candidate's communication style, clarity, and overall presentation during the interview.
-
-**IV. Overall Preliminary Recommendation:**
-   - Provide a preliminary recommendation (e.g., Proceed to next round / Hold for further consideration / Not a fit at this time).
-   - Briefly state the reasons for your recommendation.
-
-**Note:** Your report should be objective, concise, and professional. Focus on the information gathered from the interview dialogue.
-"""
+# Import the centralized prompt
+from app.core.prompts import INTERVIEW_REPORT_GENERATION_PROMPT
 
 def generate_interview_report(
     interview_dialogues: List[str],  # List of strings, each is a full_dialogue_text for a question
@@ -97,23 +66,42 @@ def generate_interview_report(
 
     try:
         # Ensure OPENAI_API_KEY is set in the environment where this code runs
-        # If not using LangChain's auto-detection, you might need to pass it explicitly:
-        # llm = ChatOpenAI(openai_api_key=OPENAI_API_KEY, model_name=llm_model_name, temperature=temperature)
-        llm = ChatOpenAI(model_name=llm_model_name, temperature=temperature)
+        # If not using LangChain\'s auto-detection, you might need to pass it explicitly:
         
-        prompt = ChatPromptTemplate.from_template(PROMPT_TEMPLATE)
+        openai_api_key = os.getenv("OPENAI_API_KEY")
+        openai_api_base = os.getenv("OPENAI_API_BASE") # Explicitly read OPENAI_API_BASE
+
+        if not openai_api_key:
+            logger.error("OPENAI_API_KEY not found in environment variables.")
+            return "Error: OPENAI_API_KEY not configured."
+
+        llm_params = {
+            "model_name": llm_model_name,
+            "temperature": temperature,
+            "openai_api_key": openai_api_key # Explicitly pass api_key
+        }
+        if openai_api_base: # If OPENAI_API_BASE is set, pass it
+            llm_params["openai_api_base"] = openai_api_base
+            logger.info(f"Using OpenAI API Base: {openai_api_base}")
+        else:
+            logger.info("Using default OpenAI API Base.")
+            
+        llm = ChatOpenAI(**llm_params)
+        
+        # Use the imported prompt
+        prompt = ChatPromptTemplate.from_template(INTERVIEW_REPORT_GENERATION_PROMPT)
         
         # LLMChain is a simple way to combine a prompt and an LLM.
         # For more complex logic (e.g., multiple LLM calls, tool usage), Agent or LCEL would be used.
         chain = LLMChain(llm=llm, prompt=prompt)
         
-        logger.info(f"Generating report for interview. Dialogues length: {len(full_dialogue_string)}, JD length: {len(job_description)}, Resume length: {len(candidate_resume)}")
+        logger.info(f"Generating report for interview. Dialogues length: {{len(full_dialogue_string)}}, JD length: {{len(job_description)}}, Resume length: {{len(candidate_resume)}}")
 
-        # Invoke the chain with the required input variables
+        # Invoke the chain with the required input variables that match the prompt template
         response = chain.invoke({
-            "job_description": job_description,
-            "candidate_resume": candidate_resume,
-            "interview_dialogues": full_dialogue_string
+            "analyzed_jd": job_description,         # CHANGED KEY
+            "structured_resume": candidate_resume,    # CHANGED KEY
+            "conversation_log": full_dialogue_string # CHANGED KEY
         })
         
         generated_report = response.get("text", "") #.text for LLMChain, .content for ChatMessage

@@ -1,5 +1,15 @@
 import sys
 import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Optional debug logs
+print(f"DEBUG main.py after load_dotenv: OPENAI_API_KEY is set: {bool(os.getenv('OPENAI_API_KEY'))}")
+print(f"DEBUG main.py after load_dotenv: OPENAI_API_BASE from env: {os.getenv('OPENAI_API_BASE')}")
+print(f"DEBUG main.py after load_dotenv: DATABASE_URL from env: {os.getenv('DATABASE_URL')}")
+
 import importlib.util
 from contextlib import asynccontextmanager
 

@@ -31,8 +31,10 @@ STATUS_DISPLAY_MAPPING = {
     "PENDING_QUESTIONS": "待生成问题",
     "QUESTIONS_GENERATED": "问题已生成",
     "SCHEDULED": "已安排",
+    "LOGGING_COMPLETED": "记录已完成",
     "COMPLETED": "已完成",
     "CANCELED": "已取消",
+    "REPORT_GENERATED": "报告已生成",
     # Add other statuses as needed
 }
 
