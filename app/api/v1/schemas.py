@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, ConfigDict
 from typing import List, Optional
 from datetime import datetime
 
@@ -18,12 +18,12 @@ class JobRead(JobBase):
     id: int
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 class JobInDBBase(JobBase):
     id: int
     created_at: datetime
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 class Job(JobInDBBase): # Schema for returning a job
     pass
@@ -45,7 +45,7 @@ class CandidateUpdate(BaseModel):
 class CandidateInDBBase(CandidateBase):
     id: int
     created_at: datetime
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 class Candidate(CandidateInDBBase): # Schema for returning a candidate
     pass 
@@ -61,7 +61,7 @@ class QuestionCreate(QuestionBase):
 class QuestionInDBBase(QuestionBase):
     id: int
     interview_id: int
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 class Question(QuestionInDBBase): # Schema for returning a question
     pass 
@@ -78,7 +78,7 @@ class Report(ReportBase):
     interview_id: int
     created_at: datetime
     updated_at: datetime
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 class ReportUpdate(BaseModel):
     generated_text: Optional[str] = None
@@ -97,7 +97,7 @@ class InterviewLog(InterviewLogBase):
     id: int
     interview_id: int
     created_at: datetime
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 # --- Interview Schemas ---
 class InterviewBase(BaseModel):
@@ -125,7 +125,7 @@ class InterviewInDBBase(InterviewBase):
     job: Optional[JobRead] = None      
     candidate: Optional[Candidate] = None 
     radar_data: Optional[dict] = None  
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True)
 
 class Interview(InterviewInDBBase): 
     pass

@@ -4,7 +4,8 @@ import os
 from typing import List, Dict, Any
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains import LLMChain
+from langchain_core.output_parsers import StrOutputParser # Added for LCEL
+# from langchain.chains import LLMChain # Removed LLMChain import
 # from dotenv import load_dotenv # Potentially use dotenv for local development API key management
 
 # For local development, you might use:
@@ -86,9 +87,8 @@ async def generate_interview_report(
         # Use the imported prompt
         prompt = ChatPromptTemplate.from_template(INTERVIEW_REPORT_GENERATION_PROMPT)
         
-        # LLMChain is a simple way to combine a prompt and an LLM.
-        # For more complex logic (e.g., multiple LLM calls, tool usage), Agent or LCEL would be used.
-        chain = LLMChain(llm=llm, prompt=prompt)
+        # Using LCEL (LangChain Expression Language)
+        chain = prompt | llm | StrOutputParser()
         
         logger.info(f"Generating report for interview. Dialogues length: {{len(conversation_log_str)}}, JD length: {{len(job_description)}}, Resume length: {{len(candidate_resume)}}")
 
@@ -99,7 +99,7 @@ async def generate_interview_report(
             "conversation_log": conversation_log_str # Use the new parameter directly
         })
         
-        generated_report = response.get("text", "")
+        generated_report = response # StrOutputParser directly returns the string
         if not generated_report.strip():
             logger.error("LLM generated an empty report.")
             return "Error: AI service generated an empty report."

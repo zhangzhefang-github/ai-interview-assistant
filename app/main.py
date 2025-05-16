@@ -46,13 +46,14 @@ from app.db.session import create_db_and_tables, SQLALCHEMY_DATABASE_URL # For s
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
     # Code to run on startup
-    print(f"Attempting to create database tables for URL: {SQLALCHEMY_DATABASE_URL}")
-    try:
-        create_db_and_tables() # This function is synchronous, run it directly
-        print("Database tables checked/created during startup.")
-    except Exception as e:
-        print(f"Error creating database tables during startup: {e}")
+    # print(f"Attempting to create database tables for URL: {SQLALCHEMY_DATABASE_URL}") # Commented out
+    # try:
+    #     create_db_and_tables() # This function is synchronous, run it directly # Commented out
+    #     print("Database tables checked/created during startup.") # Commented out
+    # except Exception as e:
+    #     print(f"Error creating database tables during startup: {e}") # Commented out
         # Handle error appropriately, maybe raise to stop app or log critical error
+    print("Application startup: Database schema management is now fully handled by Alembic.")
     yield
     # Code to run on shutdown (if any)
     print("Application shutdown.")

@@ -10,13 +10,15 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "python-dotenv>=1.0.0",
     "pydantic-settings>=2.0.0",
-    "pydantic[email]>=2.0.0",
+    "pydantic[email]>=2.0,<3.0",
     "streamlit>=1.30.0",
-    "langchain==0.3.25",
+    "langchain>=0.3.0,<0.4.0",
+    "langchain-community>=0.3.0,<0.4.0",
+    "langchain-core>=0.3.0,<0.4.0",
+    "langchain-openai>=0.2.0,<0.3.0",
     "tiktoken>=0.4.0",
     "anyio>=3.4.0,<4.0.0",
     "pymysql>=1.0.0",
-    "langchain-openai>=0.1.0",
     "python-multipart>=0.0.5",
     "python-docx>=1.1.0",
     "pymupdf>=1.23.0",
@@ -36,8 +38,6 @@ test = [
 ]
 
 [tool.pytest.ini_options]
-asyncio_mode = "strict" # or "auto"
-asyncio_default_fixture_loop_scope = "function"
 # Add other pytest configurations here if needed, e.g. markers
 # markers = [
 #     "slow: marks tests as slow to run",

@@ -11,7 +11,7 @@ from app.api.v1 import schemas # Import schemas
 from app.db import models     # Import models
 from app.db.session import get_db
 # We might need AI services later for question generation
-from app.services.ai_services import generate_interview_questions, analyze_jd, parse_resume, generate_interview_report # Added analyze_jd, parse_resume, and generate_interview_report
+from app.services.ai_services import generate_interview_questions, analyze_jd, parse_resume # Removed generate_interview_report
 from app.utils.json_parser import extract_capability_assessment_json # Import the new parser
 from app.services.ai_report_generator import generate_interview_report
 from sqlalchemy import select # For SQLAlchemy 2.0 style queries if you use them

@@ -106,7 +106,7 @@ INTERVIEW_REPORT_GENERATION_PROMPT = """
 # e.g., a prompt for summarizing a long interview transcript, etc.
 
 COMMON_FOLLOW_UP_QUESTIONS = [
-    "能否详细说明一下您在其中扮演的具体角色1？",
+    "能否详细说明一下您在其中扮演的具体角色？",
     "在这个过程中，您遇到的最大挑战是什么？您是如何克服的？",
     "这个项目/经验给您带来的最主要的收获是什么？",
     "如果可以重新来一次，您会在哪些方面做得不同？为什么？",

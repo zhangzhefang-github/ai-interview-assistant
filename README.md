@@ -1,5 +1,5 @@
 \
-[简体中文](README.zh-CN.md) <!-- Placeholder, will be verified/added later -->
+[简体中文](README_zh.md)
 
 # AI Interview Assistant
 
@@ -180,7 +180,18 @@ This project uses Alembic for database schema migrations.
 
 ## Key Development Highlights & Workflow
 
-This project evolved through several key stages and problem-solving steps:
+This project evolved through several key stages and problem-solving steps, including recent architectural upgrades and bug fixes:
+
+*   **Enhanced Environment & Testing Setup**:
+    *   Integrated `pytest-dotenv` to automatically load environment variables (like `TEST_MYSQL_DATABASE_URL`) from the `.env` file during `pytest` execution. This resolved initial test setup failures and streamlined environment management for testing.
+*   **Improved Database & Model Integrity**:
+    *   Addressed `sqlalchemy.exc.DataError` for the `Interview.status` field by ensuring that only valid `InterviewStatus` enum members were used during updates (e.g., correcting invalid values like "SCHEDULED").
+    *   Rectified Pydantic schema definitions by adding the `updated_at` field to `app.api.v1.schemas.InterviewInDBBase` (and subsequently to `InterviewOutputSchema`), aligning API responses with test assertions and preventing `AssertionError`s due to missing fields.
+*   **Increased Test Suite Robustness**:
+    *   Corrected `unittest.mock.patch` targets in API tests (e.g., in `tests/api/v1/test_interviews.py`). Mocks for AI services (like `analyze_jd`) were updated to target the path where the function is looked up (e.g., `'app.api.v1.endpoints.interviews.analyze_jd'`) rather than where it's defined, ensuring effective isolation of services during tests.
+    *   Refined timestamp assertions, for instance in `test_update_interview_success`, by parsing datetime strings from API responses into timezone-aware `datetime` objects before comparison. This made tests more resilient to minor formatting differences and ensured accurate checks (e.g., `updated_at > created_at`).
+*   **LangChain v0.3.x Adaptation**: Updated LangChain usage to align with v0.3.x standards, primarily involving the adoption of the `Runnable` interface and methods like `ainvoke()` for asynchronous chain executions. This enhances compatibility with the latest LangChain features and often improves performance for I/O-bound AI calls. (This complements the existing point on "Asynchronous Operations").
+*   **Pydantic V2 Migration**: Upgraded the project to use Pydantic V2. This involves leveraging its improved performance, stricter validation rules, and updated API (e.g., changes in model configuration and field definitions). This ensures the project benefits from the latest data validation and serialization capabilities.
 
 1.  **Initial Setup & Testing**: Ensured basic LLM calls and `pytest` setup. Encountered and resolved test database URL issues by integrating `pytest-dotenv`.
 2.  **Core Interview Logic**: Fixed data truncation errors (`DataError` for status) and assertion errors in API tests by aligning test payloads with database schema (e.g., `InterviewStatus` enum) and Pydantic schemas.
