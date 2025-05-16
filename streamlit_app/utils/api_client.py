@@ -523,36 +523,82 @@ def get_interview_details(interview_id: int) -> dict:
 def generate_report_for_interview_api(interview_id: int) -> dict:
     endpoint_path = f"v1/interviews/{interview_id}/generate-report"
     full_url = urljoin(BACKEND_API_URL, endpoint_path)
-    logger.info(f"Attempting to generate report for interview ID {interview_id} at {full_url}")
+    logger.info(f"Attempting to trigger report generation for interview ID: {interview_id} at {full_url}")
     try:
-        # Increased timeout for potentially long AI generation
-        response = requests.post(full_url, timeout=120) # 2 minutes timeout for report generation
+        response = requests.post(full_url, timeout=180) # Increased timeout for potentially long AI generation
         response.raise_for_status()
-        result_data = response.json()
-        logger.info(f"Successfully triggered report generation for interview ID {interview_id}. Response: {result_data}")
-        return result_data
+        report_data = response.json()
+        logger.info(f"Successfully triggered report generation for interview ID: {interview_id}. Report data: {report_data}")
+        return report_data
     except requests.exceptions.HTTPError as http_err:
         error_detail = http_err.response.text
         try:
             error_detail = http_err.response.json().get("detail", http_err.response.text)
         except ValueError:
             pass
-        logger.error(f"HTTP error occurred while generating report for interview ID {interview_id}: {http_err} - Status: {http_err.response.status_code} - Detail: {error_detail}")
+        logger.error(f"HTTP error occurred while triggering report generation for interview ID {interview_id}: {http_err} - Status: {http_err.response.status_code} - Detail: {error_detail}")
         raise APIError(
-            message=f"生成评估报告失败: {error_detail}",
+            message=f"生成AI评估报告失败: {error_detail}",
             status_code=http_err.response.status_code,
             details=error_detail
         )
-    except requests.exceptions.Timeout as timeout_err: # Specific timeout handling
-        logger.error(f"Timeout error occurred while generating report for interview ID {interview_id}: {timeout_err}")
-        raise APIError(message="生成评估报告超时: AI服务响应时间过长，请稍后再试或检查服务状态。")
     except requests.exceptions.RequestException as e:
-        logger.error(f"An unexpected error occurred while generating report for interview ID {interview_id}: {e}", exc_info=True)
-        raise APIError(message=f"生成评估报告时发生意外错误: {e}")
-    except ValueError as ve: 
-        logger.error(f"JSON decoding error occurred after generating report for interview ID {interview_id}: {ve}", exc_info=True)
-        raise APIError(message="生成评估报告失败: 服务器返回无效的数据格式")
+        logger.error(f"An unexpected error occurred while triggering report generation for interview ID {interview_id}: {e}", exc_info=True)
+        raise APIError(message=f"调用生成AI评估报告接口时发生意外错误: {e}")
 
-# Comment regarding the removed last two lines (they were just comments)
-# It might be useful to have update and delete functions here later.
-# For now, create and get_all/get_by_id should suffice for the initial UI. 
+# --- Interview Log API Functions ---
+def get_interview_logs_api(interview_id: int) -> list:
+    endpoint_path = f"v1/interviews/{interview_id}/logs"
+    full_url = urljoin(BACKEND_API_URL, endpoint_path)
+    logger.info(f"Fetching interview logs for interview ID {interview_id} from {full_url}")
+    try:
+        response = requests.get(full_url, timeout=10)
+        response.raise_for_status()
+        logs = response.json()
+        logger.info(f"Successfully fetched {len(logs)} logs for interview ID {interview_id}.")
+        return logs
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"HTTP error on get_interview_logs_api for ID {interview_id}: {http_err.response.status_code} - {http_err.response.text}", exc_info=True)
+        error_detail = http_err.response.text
+        try:
+            error_detail = http_err.response.json().get("detail", http_err.response.text)
+        except ValueError:
+            pass
+        raise APIError(
+            message=f"获取面试过程记录失败: 服务器返回错误",
+            status_code=http_err.response.status_code,
+            details=error_detail
+        )
+    except requests.exceptions.RequestException as e:
+        logger.error(f"API request failed for get_interview_logs_api for ID {interview_id}: {e}", exc_info=True)
+        raise APIError(message=f"获取面试过程记录失败: {e}")
+
+def create_interview_log_api(interview_id: int, log_data: dict) -> dict:
+    endpoint_path = f"v1/interviews/{interview_id}/logs"
+    full_url = urljoin(BACKEND_API_URL, endpoint_path)
+    logger.info(f"Creating interview log for interview ID {interview_id} at {full_url} with payload: {log_data}")
+    try:
+        response = requests.post(full_url, json=log_data, timeout=10)
+        response.raise_for_status()
+        created_log = response.json()
+        logger.info(f"Successfully created interview log for ID {interview_id}. Response: {created_log}")
+        return created_log
+    except requests.exceptions.HTTPError as http_err:
+        error_detail = http_err.response.text
+        try:
+            error_detail = http_err.response.json().get("detail", http_err.response.text)
+        except ValueError:
+            pass
+        logger.error(f"HTTP error occurred while creating interview log for ID {interview_id}: {http_err} - Status: {http_err.response.status_code} - Detail: {error_detail}")
+        raise APIError(
+            message=f"保存面试过程记录失败: {error_detail}",
+            status_code=http_err.response.status_code,
+            details=error_detail
+        )
+    except requests.exceptions.RequestException as e:
+        logger.error(f"An unexpected error occurred while creating interview log for ID {interview_id}: {e}", exc_info=True)
+        raise APIError(message=f"保存面试过程记录时发生意外错误: {e}")
+
+# Make sure to add new functions to __all__ if you use it for explicit exports
+# Example for __all__ if it existed at the top of the file:
+# __all__ = ["APIError", "get_jobs", "create_job", ..., "get_interview_logs_api", "create_interview_log_api"] 

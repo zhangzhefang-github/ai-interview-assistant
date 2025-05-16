@@ -25,6 +25,8 @@ if 'editing_interview_id' not in st.session_state: # For edit dialog
     st.session_state.editing_interview_id = None
 if 'interview_to_delete' not in st.session_state: # For delete confirmation
     st.session_state.interview_to_delete = None
+if 'generating_questions_for_interview_id' not in st.session_state: # For question generation spinner
+    st.session_state.generating_questions_for_interview_id = None
 
 # Define status mapping
 STATUS_DISPLAY_MAPPING = {
@@ -298,31 +300,17 @@ def show_interview_management_page():
                 with cols_data[5]:
                     action_cols = st.columns([1,1,1,1]) # Four buttons: Generate, View, Edit, Delete
                     with action_cols[0]:
-                        if st.button("✍️", key=f"generate_q_{interview_id}", help="生成或重新生成面试问题"):
-                            st.session_state.selected_interview_for_questions = interview_id
-                            logger.info(f"User clicked 'Generate Questions' for interview ID: {interview_id}")
-                            
-                            with st.spinner(f"正在为面试 ID: {interview_id} 生成问题..."):
-                                try:
-                                    response = generate_interview_questions_for_interview(interview_id)
-                                    num_questions = len(response.get('questions', []))
-                                    st.success(f"🎉 成功为面试 ID: {interview_id} 生成了 {num_questions} 个问题。状态已更新！")
-                                    logger.info(f"Successfully generated {num_questions} questions for interview {interview_id}. API Response: {response}")
-                                    # Clear selection and loaded questions for this interview if any, then rerun
-                                    if 'selected_interview_for_questions' in st.session_state:
-                                        del st.session_state.selected_interview_for_questions
-                                    if interview_id in st.session_state.loaded_questions:
-                                        del st.session_state.loaded_questions[interview_id]
-                                    if st.session_state.expanded_interview_questions == interview_id: # Collapse if it was open
-                                        st.session_state.expanded_interview_questions = None
-                                    st.rerun()
-                                except APIError as e:
-                                    logger.error(f"APIError generating questions for interview {interview_id}: {e.message}", exc_info=True)
-                                    st.error(f"为面试 ID {interview_id} 生成问题失败：{e.message}")
-                                    if e.details: st.error(f"详细信息：{e.details}")
-                                except Exception as e:
-                                    logger.error(f"Unexpected error generating questions for interview {interview_id}: {e}", exc_info=True)
-                                    st.error(f"为面试 ID {interview_id} 生成问题时发生意外错误。")
+                        # Disable button if this interview is currently generating questions
+                        disable_generate_button = st.session_state.get('generating_questions_for_interview_id') == interview_id
+                        if st.button("✍️", key=f"generate_q_{interview_id}", help="生成或重新生成面试问题", disabled=disable_generate_button):
+                            st.session_state.generating_questions_for_interview_id = interview_id
+                            # Clear previously loaded questions for this interview if any, to force refresh after generation
+                            if interview_id in st.session_state.loaded_questions:
+                                del st.session_state.loaded_questions[interview_id]
+                            if st.session_state.expanded_interview_questions == interview_id: # Collapse if it was open
+                                st.session_state.expanded_interview_questions = None
+                            logger.info(f"User clicked 'Generate Questions' for interview ID: {interview_id}. Flag set.")
+                            st.rerun() # Rerun to show the loading message and trigger processing
                     
                     with action_cols[1]:
                         if st.button("🧐", key=f"view_q_{interview_id}", help="查看/刷新面试问题"):
@@ -394,6 +382,39 @@ def show_interview_management_page():
                             st.session_state.interview_to_delete = None
                             st.rerun()
                 
+                # Display loading message & process question generation if this interview is flagged
+                if st.session_state.get('generating_questions_for_interview_id') == interview_id:
+                    # This message will appear below the current interview row
+                    status_placeholder = st.empty()
+                    # Use candidate_name in the message
+                    display_name_for_message = candidate_map.get(interview.get('candidate_id'), f"ID {interview_id}")
+                    status_placeholder.info(f"正在为候选人 “{display_name_for_message}” (面试ID: {interview_id}) 生成AI面试问题，请稍候...", icon="⏳")
+
+                    try:
+                        logger.info(f"Now actually generating questions for interview ID: {interview_id} (Candidate: {display_name_for_message})")
+                        response = generate_interview_questions_for_interview(interview_id)
+                        num_questions = len(response.get('questions', []))
+                        status_placeholder.success(f"成功为候选人 “{display_name_for_message}” (面试ID: {interview_id}) 生成了 {num_questions} 个问题。状态已更新！", icon="🎉")
+                        logger.info(f"Successfully generated {num_questions} questions for interview {interview_id} (Candidate: {display_name_for_message}). API Response: {response}")
+                        
+                        # Clear the flag for this specific interview
+                        st.session_state.generating_questions_for_interview_id = None 
+                        
+                        import time
+                        time.sleep(2) # Show success message for 2 seconds
+                        st.rerun() # Rerun to reflect updated interview list (status might change)
+
+                    except APIError as e:
+                        logger.error(f"APIError generating questions for interview {interview_id} (Candidate: {display_name_for_message}): {e.message}", exc_info=True)
+                        status_placeholder.error(f"为候选人 “{display_name_for_message}” (面试ID: {interview_id}) 生成问题失败：{e.message}", icon="🚨")
+                        if e.details: st.error(f"详细信息：{e.details}") 
+                        st.session_state.generating_questions_for_interview_id = None # Clear flag on error
+
+                    except Exception as e:
+                        logger.error(f"Unexpected error generating questions for interview {interview_id} (Candidate: {display_name_for_message}): {e}", exc_info=True)
+                        status_placeholder.error(f"为候选人 “{display_name_for_message}” (面试ID: {interview_id}) 生成问题时发生意外错误。", icon="🚨")
+                        st.session_state.generating_questions_for_interview_id = None # Clear flag on error
+
                 # Display questions if this interview is expanded and questions are loaded
                 if st.session_state.expanded_interview_questions == interview_id:
                     questions_to_display = st.session_state.loaded_questions.get(interview_id)

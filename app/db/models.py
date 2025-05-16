@@ -43,7 +43,7 @@ class InterviewLog(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     interview_id = Column(Integer, ForeignKey("interviews.id"), nullable=False)
-    question_id = Column(Integer, ForeignKey("questions.id"), nullable=True) # Link to the specific question if applicable
+    question_id = Column(Integer, ForeignKey("questions.id", ondelete="SET NULL"), nullable=True) # Link to the specific question if applicable
     
     # Stores the actual text of the question at the time of logging,
     # useful if predefined questions can change or if it's an ad-hoc question.

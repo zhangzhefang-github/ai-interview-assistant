@@ -322,28 +322,34 @@ async def trigger_generate_interview_report(
             question_text = log_entry.question_text_snapshot or "(Ad-hoc Question)" 
             answer_text = log_entry.full_dialogue_text or "(No answer recorded)"
             dialogue_parts.append(f"Q{i+1}: {question_text}\nA{i+1}: {answer_text}")
-        formatted_dialogue = "\n\n".join(dialogue_parts)
-        logger.info(f"Using structured logs for report generation for interview {interview_id}. Dialogue length: {len(formatted_dialogue)}")
+        dialogue_for_report = "\n\n".join(dialogue_parts) # Assign to dialogue_for_report
+        logger.info(f"Using structured logs for report generation for interview {interview_id}. Dialogue length: {len(dialogue_for_report)}")
     elif db_interview.conversation_log: # Fallback to old field if no structured logs (should be phased out)
-        formatted_dialogue = db_interview.conversation_log
         logger.warning(f"Interview {interview_id}: No structured logs found. Falling back to conversation_log field for report generation.")
+        # Ensure conversation_log is not None or empty before assigning
+        if not db_interview.conversation_log.strip(): # Check if it's empty or just whitespace
+            logger.error(f"Interview {interview_id}: Fallback conversation_log is empty. Cannot generate report.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid interview conversation log found (fallback is empty) to generate a report.")
+        dialogue_for_report = db_interview.conversation_log
     else:
         logger.error(f"Interview {interview_id}: No interview logs (structured or fallback) found. Cannot generate report.")
+        # Initialize dialogue_for_report to an empty string or handle appropriately if this path means error
+        dialogue_for_report = "" # Initialize to prevent UnboundLocalError before raising
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No valid interview conversation log found to generate report.")
     # ---
 
-    if not formatted_dialogue.strip():
-        logger.error(f"Interview {interview_id}: Formatted dialogue is empty. Cannot generate report.")
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Interview conversation log is empty.")
+    if not dialogue_for_report.strip():
+        logger.error(f"Interview {interview_id}: Final dialogue content for report is empty or whitespace. Cannot generate report.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Interview dialogue content is empty. Cannot generate report.")
 
     logger.info(f"Calling AI service to generate report for interview ID: {interview_id} using processed dialogue input.")
     try:
-        # The generate_interview_report service should handle the actual AI call and prompt formatting.
-        # It expects job_description, candidate_resume, and the full_dialogue_string.
+        # generate_interview_report is now an async function, so await is needed.
         generated_report_text = await generate_interview_report(
+            conversation_log_str=dialogue_for_report,
             job_description=db_interview.job.description,
-            candidate_resume=db_interview.candidate.resume_text,
-            full_dialogue_string=formatted_dialogue # Pass the constructed dialogue string
+            candidate_resume=db_interview.candidate.resume_text
+            # llm_model_name and temperature will use defaults from the service
         )
         logger.info(f"Successfully generated interview report text for interview {interview_id}.")
 

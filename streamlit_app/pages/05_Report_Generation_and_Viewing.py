@@ -266,7 +266,9 @@ def show_report_generation_page():
                 else:
                     logger.info(f"User initiated GENERATION of report for interview ID: {selected_interview_id}")
                 
-                with st.spinner("AI正在分析并生成报告中，请稍候..."):
+                # Use display_candidate_name and selected_interview_id in the spinner message
+                spinner_message = f"正在为候选人 “{display_candidate_name}” (面试ID: {selected_interview_id}) 生成AI评估报告，请稍候..."
+                with st.spinner(spinner_message):
                     try:
                         logger.info(f"Calling generate_report_for_interview_api for interview ID: {selected_interview_id}")
                         api_response = generate_report_for_interview_api(selected_interview_id)
