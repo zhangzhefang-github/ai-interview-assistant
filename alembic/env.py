@@ -14,9 +14,24 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from app.db.models import Base
 import app.db.models
 
+# --- BEGIN: Dynamically load DATABASE_URL from .env ---
+from dotenv import load_dotenv
+
+# 构建 .env 文件的绝对路径 (假设 .env 在项目根目录, 即 alembic/ 的上一级)
+dotenv_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+load_dotenv(dotenv_path)
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+# --- END: Dynamically load DATABASE_URL from .env ---
+
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# --- BEGIN: Override sqlalchemy.url if DATABASE_URL is set ---
+if DATABASE_URL:
+    config.set_main_option("sqlalchemy.url", DATABASE_URL)
+# --- END: Override sqlalchemy.url if DATABASE_URL is set ---
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

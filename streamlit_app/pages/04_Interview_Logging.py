@@ -1,11 +1,16 @@
 import streamlit as st
-from streamlit_app.utils.api_client import APIError, get_interviews, get_interview_logs_api, create_interview_log_api # Added new log APIs
+from streamlit_app.utils.api_client import APIError, get_interviews, get_interview_logs_api, create_interview_log_api, BACKEND_API_URL # Added BACKEND_API_URL
 from streamlit_app.utils.logger_config import get_logger
 from datetime import datetime
 from streamlit_app.utils.api_client import get_jobs, get_candidates # Re-import for job/candidate maps
 from streamlit_app.utils.api_client import get_questions_for_interview
 from streamlit_app.utils.api_client import update_interview_api
 from app.core.prompts import COMMON_FOLLOW_UP_QUESTIONS # Import the new list
+import json # For parsing SSE data
+from sseclient import SSEClient # For handling SSE stream
+import httpx # SSEClient might use requests, ensure robust http client for API calls if needed elsewhere
+from urllib.parse import urljoin # Ensure urljoin is available for constructing SSE URL
+from app.api.v1 import schemas # schemas is imported here
 
 # Logger Setup
 logger = get_logger(__name__)
@@ -28,6 +33,21 @@ if 'messages' not in st.session_state: # For chat messages
 if 'current_interview_status' not in st.session_state:
     st.session_state.current_interview_status = None
 
+# New session state variables for followup suggestions
+if 'followup_suggestions_data' not in st.session_state: # Stores {log_id: {task_id, status, thoughts, suggestions, error}}
+    st.session_state.followup_suggestions_data = {}
+if 'generating_followup_for_log_id' not in st.session_state: # Tracks which log_id is currently loading suggestions
+    st.session_state.generating_followup_for_log_id = None
+if 'active_sse_source' not in st.session_state: # To store the active EventSource object if any
+    st.session_state.active_sse_source = None
+if 'current_chat_input_key' not in st.session_state:
+    st.session_state.current_chat_input_key = "chat_input_default" # Key for st.chat_input
+if 'last_used_log_id_for_suggestion' not in st.session_state: # Tracks the log_id for which suggestions were last shown expanded
+    st.session_state.last_used_log_id_for_suggestion = None
+# Placeholders for streaming UI, keyed by log_id
+if 'streaming_placeholders' not in st.session_state:
+    st.session_state.streaming_placeholders = {}
+
 STATUS_DISPLAY_MAPPING = {
     "PENDING_QUESTIONS": "待生成问题",
     "QUESTIONS_GENERATED": "问题已生成",
@@ -40,13 +60,18 @@ STATUS_DISPLAY_MAPPING = {
 }
 
 # Helper function to add a message to chat and save to API
-def add_message_and_save(interview_id: int, role: str, content: str, question_id: int = None):
-    logger.debug(f"[add_message_and_save] Called for interview_id={interview_id}, role={role}, question_id={question_id}, content snippet: {content[:30]}...")
+def add_message_and_save(interview_id: int, role: str, content: str, speaker_role_value: str, question_id: int = None, question_text_snapshot_override: str = None):
+    logger.debug(f"[add_message_and_save] Called for interview_id={interview_id}, role={role}, speaker_role_value={speaker_role_value}, question_id={question_id}, snapshot_override_provided={question_text_snapshot_override is not None}, content snippet: {content[:30]}...")
     # Add to session state for immediate display
     # Determine order_num based on existing messages for this interview
     # This simple order_num might need refinement if messages are fetched paginated or out of order
     current_messages_for_interview = [msg for msg in st.session_state.messages if msg.get('interview_id') == interview_id]
     order_num = len(current_messages_for_interview) + 1
+    # Try to get the actual log_id from the API response if this function is called after a save
+    # However, this function is called *before* the API call to create_interview_log_api in the current flow
+    # So, log_id will be None here for new messages. It will be populated when fetching historical logs.
+    log_id_from_creation = None 
+
     logger.debug(f"[add_message_and_save] Current messages count for interview {interview_id}: {len(current_messages_for_interview)}. New order_num: {order_num}")
     
     new_message_for_display = {
@@ -54,32 +79,256 @@ def add_message_and_save(interview_id: int, role: str, content: str, question_id
         "role": role, 
         "content": content, 
         "question_id": question_id, 
-        "order_num": order_num # Add order_num for display and potential future sorting
+        "order_num": order_num, # Add order_num for display and potential future sorting
+        "log_id": log_id_from_creation # Will be None for new messages initially
     }
+    # If it's a candidate's answer and we have a snapshot override, add it to display model too for consistency
+    if speaker_role_value == "CANDIDATE" and question_text_snapshot_override:
+        new_message_for_display['question_text_snapshot'] = question_text_snapshot_override
+    elif question_id: # If there's a question_id, try to find its text for display (for interviewer turns)
+        # This part might be complex if questions are not pre-loaded or if it's a re-asked q
+        # For now, assume pre-loaded questions in sidebar or that content itself for interviewer is the question text.
+        pass # Simple display for now.
+
     st.session_state.messages.append(new_message_for_display)
 
     # Prepare payload for API
     log_payload = {
         "full_dialogue_text": content,
-        # "role": role, # Our backend schema for InterviewLogCreate expects full_dialogue_text, not role directly.
-        # The 'role' is more for display logic on the frontend or if the backend wants to store it separately.
-        # For now, full_dialogue_text will contain the Q or A.
-        # We can infer Q/A based on the order or a convention (e.g. user=Q, assistant=A)
         "question_id": question_id, 
-        "order_num": order_num
+        "order_num": order_num,
+        "speaker_role": speaker_role_value # ADDED speaker_role for backend
     }
+    if question_text_snapshot_override:
+        log_payload["question_text_snapshot"] = question_text_snapshot_override
 
     logger.debug(f"[add_message_and_save] Preparing log_payload: {log_payload}")
     try:
-        logger.info(f"Saving message for interview {interview_id}: Role: {role}, Content: {content[:50]}..., QID: {question_id}, Order: {order_num}")
-        create_interview_log_api(interview_id, log_payload)
-        logger.info(f"Message saved successfully for interview {interview_id}.")
+        logger.info(f"Saving message for interview {interview_id}: Role: {role}, Content: {content[:50]}..., QID: {question_id}, Order: {order_num}, SnapshotOver: {question_text_snapshot_override is not None}")
+        created_log_entry = create_interview_log_api(interview_id, log_payload)
+        logger.info(f"Message saved successfully for interview {interview_id}. Log ID: {created_log_entry.get('id')}")
+        # Update the message in st.session_state.messages with the actual log_id from response
+        for msg in reversed(st.session_state.messages):
+            if msg.get('interview_id') == interview_id and msg.get('order_num') == order_num and msg.get('log_id') is None:
+                msg['log_id'] = created_log_entry.get('id')
+                logger.debug(f"Updated newly added message in session_state with log_id: {created_log_entry.get('id')}")
+                break
     except APIError as e:
         st.error(f"保存消息失败: {e.message}")
         logger.error(f"Failed to save message for interview {interview_id}: {e}", exc_info=True)
         # Optionally remove the message from st.session_state.messages if save fails, or mark it as unsaved
         # For simplicity, we'll leave it for now, but a production app might need robust error handling here.
         st.session_state.messages.pop() # Remove optimistic update if save fails
+
+def request_followup_suggestions(interview_id: int, log_id: int):
+    logger.critical(f"CRITICAL_DEBUG: BACKEND_API_URL is: '{BACKEND_API_URL}'") # Log the value
+    logger.critical(f"CRITICAL_DEBUG: request_followup_suggestions called for interview_id={interview_id}, log_id={log_id}. Button click was registered!")
+    logger.info(f"Requesting followup suggestions for interview_id={interview_id}, log_id={log_id}")
+    st.session_state.generating_followup_for_log_id = log_id
+    st.session_state.followup_suggestions_data[log_id] = {
+        "task_id": None,
+        "status": "loading", 
+        "thoughts": [], 
+        "suggestions": [], 
+        "error": None
+    }
+    st.session_state.last_used_log_id_for_suggestion = log_id # Auto-expand for this one
+
+    # Prepare placeholders for this specific log_id if not already done
+    # These will be created by show_interview_logging_page when it first renders the expander in loading state
+    # Here, we just ensure the keys are initialized in session_state for clarity if needed,
+    # but actual st.empty() objects are best managed by the rendering part of the script.
+    # It's safer for request_followup_suggestions to just update data in st.session_state,
+    # and have the main UI rendering loop pick up these changes when it re-runs or when specific
+    # st.empty() instances are updated directly if passed or globally accessible (which is not typical for callbacks).
+
+    # Let's rely on st.empty() instances being updated if they are accessible.
+    # The main change will be how these placeholders are populated.
+
+    # Ensure BACKEND_API_URL (e.g. http://localhost:8000) does not end with a slash for this logic
+    cleaned_base_url = BACKEND_API_URL.rstrip('/') 
+
+    # BACKEND_API_URL is 'http://localhost:8000/api/v1', so path_segment should start from the next part.
+    path_segment = f"/interviews/{interview_id}/logs/{log_id}/generate-followup-stream"
+    sse_url = f"{cleaned_base_url}{path_segment}"
+    
+    logger.debug(f"Attempting to connect to SSE stream with constructed URL: {sse_url}")
+
+    _final_status_for_logging = "unknown" # Variable to hold status for logging in finally block
+
+    try:
+        # Using httpx to manually process SSE stream for better control
+        with httpx.Client(timeout=None) as client: # Client-level timeout, can be None for no timeout on client ops unless specified in request
+            with client.stream("GET", sse_url, timeout=60.0) as response: # Request-specific timeout (e.g., 60 seconds for the entire stream duration if no data for a long time)
+                response.raise_for_status() # Check for initial HTTP errors
+                logger.info(f"SSE stream connection successful for {sse_url}. Status: {response.status_code}")
+                
+                current_event_name = None
+                current_data_lines = []
+
+                for line in response.iter_lines():
+                    line = line.strip()
+                    logger.debug(f"SSE raw line: {line}")
+                    if not line: # Empty line signifies end of an event
+                        if current_event_name and current_data_lines: # current_event_name is the type from "event:"
+                            data_str = "\n".join(current_data_lines)
+                            logger.debug(f"FRONTEND_SSE_DEBUG: Raw Event Name: '{current_event_name}', Raw Data: '{data_str[:300]}...'") # DETAILED DEBUG LOG
+                            try:
+                                # data_str is the JSON string from the 'data:' field of the SSE event.
+                                # This JSON itself is a serialized AgUiSsePayload.
+                                ag_ui_payload_dict = json.loads(data_str) 
+                                
+                                # The actual business payload for the event (like TaskStartData, ThoughtData, etc.)
+                                # IS ag_ui_payload_dict itself, not nested under a "payload" key for sse-starlette.
+                                event_data_for_processing = ag_ui_payload_dict # CORRECTED LINE
+
+                                current_data_state = st.session_state.followup_suggestions_data.get(log_id)
+                                if not current_data_state: 
+                                    logger.warning(f"Log ID {log_id} data disappeared from session state during SSE processing.")
+                                    _final_status_for_logging = "error_state_disappeared"
+                                    break # Exit loop if state is gone
+
+                                # Use current_event_name (from "event:" line) to determine how to process event_data_for_processing
+                                if current_event_name == schemas.AgUiEventType.TASK_START.value:
+                                    current_data_state["task_id"] = event_data_for_processing.get("task_id")
+                                    current_data_state["status"] = "thinking" # Set status to thinking on task start
+                                    current_data_state["thoughts"].append(event_data_for_processing.get("message", "Task started..."))
+                                elif current_event_name == schemas.AgUiEventType.THOUGHT.value:
+                                    current_data_state["thoughts"].append(event_data_for_processing.get("thought", "Thinking..."))
+                                # After updating thoughts in session_state, update the placeholder
+                                thoughts_ph = st.session_state.streaming_placeholders.get(log_id, {}).get("thoughts")
+                                if thoughts_ph:
+                                    thoughts_md = "⏳ AI 思考过程...\n" + "\\n".join([f"> 🧠 {thought}" for thought in current_data_state["thoughts"]])
+                                    if current_data_state.get("status") in ["loading", "thinking"]:
+                                        thoughts_md += "\\n\\nAI 正在分析并生成追问建议，请稍候..."
+                                    thoughts_ph.markdown(thoughts_md)
+                                
+                                elif current_event_name == schemas.AgUiEventType.QUESTION_CHUNK.value:
+                                    # For QUESTION_CHUNK, the payload (event_data_for_processing) is AgUiQuestionChunkData
+                                    chunk_text = event_data_for_processing.get("chunk_text", "")
+                                    # Optionally update a "thinking/streaming" message here with chunk_text
+                                    # current_data_state["thoughts"].append(f"Chunk: {chunk_text[:30]}...") 
+                                elif current_event_name == schemas.AgUiEventType.QUESTION_GENERATED.value:
+                                    # For QUESTION_GENERATED, the payload (event_data_for_processing) is AgUiQuestionGeneratedData
+                                    q_text = event_data_for_processing.get("question_text")
+                                    if q_text and q_text not in current_data_state["suggestions"]:
+                                        current_data_state["suggestions"].append(q_text)
+                                        logger.info(f"LogID {log_id}: Added suggestion: {q_text}")
+                                        # After updating suggestions, update the placeholder
+                                        suggestions_ph = st.session_state.streaming_placeholders.get(log_id, {}).get("suggestions")
+                                        if suggestions_ph:
+                                            with suggestions_ph.container():
+                                                if current_data_state["suggestions"]: # Check if there are any suggestions
+                                                    st.write("AI 建议您可以这样追问：")
+                                                    for idx, suggestion_text in enumerate(current_data_state["suggestions"]):
+                                                        cols = st.columns([0.85, 0.15])
+                                                        with cols[0]:
+                                                            st.markdown(f"- {suggestion_text}")
+                                                        with cols[1]:
+                                                            if st.button("📌 提问", key=f"ask_suggestion_{log_id}_{idx}_{current_event_name}", help="使用此建议提问"): # Added event name to key for more uniqueness
+                                                                logger.info(f"User chose to ask AI suggestion for log_id {log_id}: '{suggestion_text}'")
+                                                                add_message_and_save(
+                                                                    selected_interview_id, 
+                                                                    "user",
+                                                                    suggestion_text, 
+                                                                    speaker_role_value="INTERVIEWER"
+                                                                )
+                                                                current_data_state["status"] = "used" # Mark as used
+                                                                st.session_state.last_used_log_id_for_suggestion = None 
+                                                                # Clear placeholders after action
+                                                                if st.session_state.streaming_placeholders.get(log_id, {}).get("thoughts"):
+                                                                    st.session_state.streaming_placeholders[log_id]["thoughts"].empty()
+                                                                if st.session_state.streaming_placeholders.get(log_id, {}).get("suggestions"):
+                                                                    st.session_state.streaming_placeholders[log_id]["suggestions"].empty()
+                                                                st.rerun() 
+                                                else: # No suggestions yet, placeholder should be empty or show a mild "waiting" message
+                                                    st.caption("等待AI生成建议...")
+                                elif current_event_name == schemas.AgUiEventType.TASK_END.value:
+                                    task_successful = event_data_for_processing.get("success", False)
+                                    task_message = event_data_for_processing.get("message", "Task ended.")
+
+                                    if task_successful:
+                                        current_data_state["status"] = "completed_success"
+                                        if not current_data_state["suggestions"]:
+                                            current_data_state["error"] = task_message # Or a more specific message like "AI generated no specific suggestions."
+                                    else: # Task not successful
+                                        current_data_state["status"] = "completed_error"
+                                        if not current_data_state["error"]: # Set error only if not already set by a previous ERROR event
+                                            current_data_state["error"] = task_message # Message from task_end
+                                    
+                                    _final_status_for_logging = f"completed_task_end_event_success_{task_successful}"
+                                    # Do not break here, let the loop naturally end or timeout if backend keeps stream open
+                                elif current_event_name == schemas.AgUiEventType.ERROR.value:
+                                    current_data_state["status"] = "error"
+                                    current_data_state["error"] = event_data_for_processing.get("error_message", "Unknown error during generation.")
+                                    _final_status_for_logging = "error_from_sse_event" 
+                                    # Break on explicit error from backend might be desired
+                                    # break 
+                                
+                            except json.JSONDecodeError:
+                                logger.warning(f"SSE JSON Decode Error for data: {data_str}")
+                                if log_id in st.session_state.followup_suggestions_data: # Check if log_id still exists
+                                    st.session_state.followup_suggestions_data[log_id]["error"] = f"Invalid data from AI: {data_str[:50]}"
+                                    st.session_state.followup_suggestions_data[log_id]["status"] = "error"
+                                _final_status_for_logging = "error_json_decode"
+                                break # Break loop on JSON error
+                            except Exception as e_proc: # Catch-all for other processing errors
+                                logger.error(f"Error processing prepared SSE data '{data_str}': {e_proc}", exc_info=True)
+                                if log_id in st.session_state.followup_suggestions_data: # Check if log_id still exists
+                                    st.session_state.followup_suggestions_data[log_id]["error"] = f"Client error processing data: {str(e_proc)[:100]}" # Limit error message length
+                                    st.session_state.followup_suggestions_data[log_id]["status"] = "error"
+                                _final_status_for_logging = "error_processing_event"
+                                break # Break loop on other processing error
+                        current_data_lines = []
+                        current_event_name = None # Reset for next event
+                    elif line.startswith("event:"):
+                        current_event_name = line[len("event:"):].strip()
+                    elif line.startswith("data:"):
+                        current_data_lines.append(line[len("data:"):].strip())
+                    # Ignoring id: and retry: fields for now
+        
+        # After loop, finalize status if still processing
+        if log_id in st.session_state.followup_suggestions_data and \
+           st.session_state.followup_suggestions_data[log_id]["status"] in ["loading", "thinking"]:
+            st.session_state.followup_suggestions_data[log_id]["status"] = "completed_stream_ended"
+            if not st.session_state.followup_suggestions_data[log_id]["suggestions"] and \
+               not st.session_state.followup_suggestions_data[log_id]["error"]:
+                 st.session_state.followup_suggestions_data[log_id]["error"] = "AI stream ended without suggestions or specific error."
+            _final_status_for_logging = st.session_state.followup_suggestions_data[log_id].get("status", "completed_try_block")
+
+    except httpx.HTTPStatusError as http_err_sse:
+        logger.error(f"HTTP error connecting to SSE stream {sse_url}: {http_err_sse}", exc_info=True)
+        if log_id in st.session_state.followup_suggestions_data:
+            st.session_state.followup_suggestions_data[log_id]["error"] = f"Failed to connect to AI suggestion service: {http_err_sse.response.status_code} - {http_err_sse.response.text[:100]}"
+            st.session_state.followup_suggestions_data[log_id]["status"] = "error"
+            st.session_state.followup_suggestions_data[log_id]["thoughts"] = [] # Clear thoughts
+            st.session_state.followup_suggestions_data[log_id]["suggestions"] = [] # Clear suggestions
+        _final_status_for_logging = "error_http_status"
+    except Exception as e_sse:
+        logger.error(f"Generic error with SSE connection or processing for {sse_url}: {e_sse}", exc_info=True)
+        if log_id in st.session_state.followup_suggestions_data:
+            st.session_state.followup_suggestions_data[log_id]["error"] = f"Error during AI suggestion generation: {str(e_sse)[:100]}"
+            st.session_state.followup_suggestions_data[log_id]["status"] = "error"
+            st.session_state.followup_suggestions_data[log_id]["thoughts"] = [] # Clear thoughts
+            st.session_state.followup_suggestions_data[log_id]["suggestions"] = [] # Clear suggestions
+        _final_status_for_logging = "error_generic_exception"
+    finally:
+        st.session_state.generating_followup_for_log_id = None
+        final_status_to_log = _final_status_for_logging if _final_status_for_logging != "unknown" else st.session_state.followup_suggestions_data.get(log_id, {}).get("status", "unknown_fallback")
+        logger.info(f"Finished followup suggestion request for log_id={log_id}. Final status for logging: {final_status_to_log}")
+        
+        # Clear placeholders for this log_id from session_state after stream ends or on error
+        # to ensure they are recreated fresh if the user tries again.
+        if log_id in st.session_state.streaming_placeholders:
+            if st.session_state.streaming_placeholders[log_id].get("thoughts"):
+                st.session_state.streaming_placeholders[log_id]["thoughts"].empty() # Clear content
+            if st.session_state.streaming_placeholders[log_id].get("suggestions"):
+                st.session_state.streaming_placeholders[log_id]["suggestions"].empty() # Clear content
+            # Optionally delete the placeholder keys from streaming_placeholders[log_id] itself
+            # or just rely on them being empty for next run. For now, emptying content is fine.
+            # del st.session_state.streaming_placeholders[log_id] # This would remove the log_id entry
+
+        st.rerun() # Final rerun to clear loading state and show final result/error
 
 def show_interview_logging_page():
     st.header("🎤 面试过程记录 (聊天模式)")
@@ -194,7 +443,8 @@ def show_interview_logging_page():
                         "role": role_for_display, 
                         "content": log_entry.get("full_dialogue_text"), 
                         "question_id": log_entry.get("question_id"),
-                        "order_num": log_entry.get("order_num", 0) # Use order_num from backend
+                        "order_num": log_entry.get("order_num", 0), # Use order_num from backend
+                        "log_id": log_entry.get("id") # <<< STORE THE ACTUAL LOG ID FROM BACKEND
                     })
                 # Ensure messages are sorted by order_num, as they might come unordered or be appended later
                 st.session_state.messages.sort(key=lambda x: x.get('order_num', 0))
@@ -228,7 +478,7 @@ def show_interview_logging_page():
                         # This simple check might not be perfect if questions can be re-asked deliberately
                         already_asked = any(msg.get('question_id') == question_actual_id and msg.get('role') == 'user' for msg in st.session_state.messages if msg.get('interview_id') == selected_interview_id)
                         if not already_asked or st.checkbox("再次提问此问题？", key=f"reask_confirm_{question_actual_id}", value=False):
-                            add_message_and_save(selected_interview_id, "user", question_text, question_id=question_actual_id)
+                            add_message_and_save(selected_interview_id, "user", question_text, speaker_role_value="INTERVIEWER", question_id=question_actual_id)
                             st.rerun()
                         elif already_asked:
                             st.sidebar.warning("此问题已提问过。")
@@ -245,14 +495,76 @@ def show_interview_logging_page():
         # Display chat messages from history
         chat_container = st.container()
         with chat_container:
-            for message in st.session_state.messages:
+            for message_idx, message in enumerate(st.session_state.messages):
                 # Only display messages for the currently selected interview
                 if message.get("interview_id") == selected_interview_id:
+                    # Use a unique key for each chat message block if needed, e.g. f"chat_msg_block_{selected_interview_id}_{message.get('log_id', message_idx)}"
                     with st.chat_message(message["role"]):
                         st.markdown(message["content"])
                         if message.get("question_id") and message["role"] == "user":
-                            st.caption(f"(基于预设问题 ID: {message['question_id']})")
-                    
+                            st.caption(f"(基于预设问题 ID: {message['question_id']}) Log ID: {message.get('log_id')}")
+                        elif message["role"] == "assistant": # Candidate's answer
+                            st.caption(f"Log ID: {message.get('log_id')}") # Display log_id for candidate answers too
+
+                    # AI Followup Suggestions Section for candidate's answers
+                    if message["role"] == "assistant" and message.get("log_id") is not None:
+                        log_id = message.get("log_id")
+                        suggestion_data = st.session_state.followup_suggestions_data.get(log_id)
+                        
+                        # Determine if this expander should be open by default
+                        is_active_suggestion_log = (st.session_state.last_used_log_id_for_suggestion == log_id)
+                        expand_this = is_active_suggestion_log
+
+                        # Button to trigger suggestion generation
+                        if st.session_state.generating_followup_for_log_id == log_id and suggestion_data and suggestion_data.get("status") == "loading":
+                            st.button("✨ AI正在生成追问建议...", disabled=True, key=f"loading_followup_btn_{log_id}")
+                        elif not suggestion_data or suggestion_data.get("status") == "initial" or suggestion_data.get("status") == "used": # Allow re-generation if used
+                            if st.button("✨ 获取AI追问建议", key=f"get_followup_btn_{log_id}", on_click=request_followup_suggestions, args=(selected_interview_id, log_id)):
+                                # When button is clicked, request_followup_suggestions will set generating_followup_for_log_id
+                                # And the next rerun will create the placeholders.
+                                pass 
+                        
+                        if suggestion_data:
+                            with st.expander("AI 追问建议", expanded=expand_this):
+                                if st.session_state.generating_followup_for_log_id == log_id :
+                                    # Create/get placeholders if we are actively generating for this log_id
+                                    if log_id not in st.session_state.streaming_placeholders:
+                                        st.session_state.streaming_placeholders[log_id] = {
+                                            "thoughts": st.empty(),
+                                            "suggestions": st.empty()
+                                        }
+                                    
+                                    # Initial rendering of placeholders (will be updated by the callback)
+                                    # Thoughts placeholder will be populated by the callback
+                                    st.session_state.streaming_placeholders[log_id]["thoughts"].markdown("⏳ AI 思考过程...\nAI 正在分析并生成追问建议，请稍候...")
+                                    # Suggestions placeholder initially empty or with a waiting message
+                                    with st.session_state.streaming_placeholders[log_id]["suggestions"].container():
+                                        st.caption("等待AI生成建议...")
+
+                                elif suggestion_data.get("error"): # PRIORITIZE ERROR DISPLAY if not loading
+                                    st.error(f"无法获取追问建议: {suggestion_data['error']}")
+                                
+                                elif suggestion_data.get("suggestions"): # Display suggestions if already generated and not currently loading
+                                    st.write("AI 建议您可以这样追问：")
+                                    for idx, suggestion_text in enumerate(suggestion_data["suggestions"]):
+                                        cols = st.columns([0.85, 0.15])
+                                        with cols[0]:
+                                            st.markdown(f"- {suggestion_text}")
+                                        with cols[1]:
+                                            if st.button("📌 提问", key=f"ask_suggestion_{log_id}_{idx}_static", help="使用此建议提问"):
+                                                logger.info(f"User chose to ask AI suggestion for log_id {log_id}: '{suggestion_text}'")
+                                                add_message_and_save(
+                                                    selected_interview_id, 
+                                                    "user", 
+                                                    suggestion_text, 
+                                                    speaker_role_value="INTERVIEWER"
+                                                )
+                                                suggestion_data["status"] = "used" # Mark as used
+                                                st.session_state.last_used_log_id_for_suggestion = None 
+                                                st.rerun()
+                                elif suggestion_data.get("status") not in ["loading", "thinking", "used"] and not suggestion_data.get("error"):
+                                    st.caption("AI 未能生成具体的追问建议，或建议已被使用。")
+
         # Popover for common follow-up questions - MOVED OUT OF THE LOOP
         # Placed before chat input for visibility.
         with st.popover("💡 常用追问角度", help="点击选择一个常用追问问题发送", use_container_width=False):
@@ -266,7 +578,7 @@ def show_interview_logging_page():
                 button_key = f"popover_followup_{selected_interview_id}_{i}"
                 if st.button(followup_text, key=button_key, use_container_width=True):
                     logger.info(f"Popover follow-up button clicked: '{followup_text}' for interview {selected_interview_id}.")
-                    add_message_and_save(selected_interview_id, "user", followup_text)
+                    add_message_and_save(selected_interview_id, "user", followup_text, speaker_role_value="INTERVIEWER")
                     # Popovers auto-close on button click inside them if that button causes a rerun.
                     st.rerun() # Rerun to update the main chat display
 
@@ -285,7 +597,45 @@ def show_interview_logging_page():
 
         if prompt := st.chat_input(input_prompt, key=f"chat_input_{selected_interview_id}"):
             logger.info(f"Chat input submitted for interview {selected_interview_id}. Role: '{current_input_role}', Prompt: '{prompt[:50]}...'.")
-            add_message_and_save(selected_interview_id, current_input_role, prompt)
+            
+            backend_speaker_role = "INTERVIEWER" if current_input_role == "user" else "CANDIDATE"
+            
+            # Variables to pass to add_message_and_save
+            q_id_for_log = None
+            q_text_snapshot_for_log = None
+
+            if backend_speaker_role == "CANDIDATE":
+                # This is a candidate's answer. Try to find the last interviewer question.
+                for msg_idx in range(len(st.session_state.messages) - 1, -1, -1):
+                    prev_msg = st.session_state.messages[msg_idx]
+                    if prev_msg.get("interview_id") == selected_interview_id and prev_msg.get("role") == "user": # "user" is INTERVIEWER in chat
+                        q_id_for_log = prev_msg.get("question_id") # May be None if ad-hoc
+                        q_text_snapshot_for_log = prev_msg.get("content") # Always get content as snapshot for ad-hoc
+                        logger.debug(f"Candidate answer for interview {selected_interview_id}. Associated with QID: {q_id_for_log}, QText: '{q_text_snapshot_for_log[:30]}...'")
+                        break
+                # If q_id_for_log is None (i.e., it was an ad-hoc interviewer question), 
+                # q_text_snapshot_for_log (the ad-hoc question text) will be passed as override.
+                # If q_id_for_log is NOT None, backend will use it to fetch snapshot if override is not provided.
+                # So, if we have q_id_for_log, we don't *need* to send q_text_snapshot_for_log, 
+                # but sending it if available (especially for ad-hoc) is safer.
+                add_message_and_save(
+                    selected_interview_id, 
+                    current_input_role,  
+                    prompt, 
+                    speaker_role_value=backend_speaker_role,
+                    question_id=q_id_for_log,
+                    question_text_snapshot_override=q_text_snapshot_for_log # Pass the snapshot
+                )
+            else: # INTERVIEWER's message (a question or a comment)
+                # If interviewer types a question, it won't have a question_id from DB initially.
+                # The question_text_snapshot will be its own content if a candidate answers it later.
+                add_message_and_save(
+                    selected_interview_id, 
+                    current_input_role, 
+                    prompt, 
+                    speaker_role_value=backend_speaker_role
+                    # question_id is None here, question_text_snapshot_override is None
+                )
             st.rerun()
         
         st.divider()

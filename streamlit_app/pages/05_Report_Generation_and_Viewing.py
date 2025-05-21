@@ -5,6 +5,7 @@ from streamlit_app.utils.api_client import (
     get_jobs, # For job_map
     get_candidates, # For candidate_map
     get_interview_details, # Now using this
+    get_interview_logs, # <<< ADDED THIS IMPORT
     generate_report_for_interview_api # Now using this
 )
 from streamlit_app.utils.logger_config import get_logger
@@ -219,9 +220,106 @@ def show_report_generation_page():
             resume_text = interview_details.get("candidate", {}).get("resume_text", "无简历信息")
             st.text_area("Resume_display", value=resume_text, height=150, disabled=True, key=f"resume_{selected_interview_id}", label_visibility="collapsed")
         
-        with st.expander("面试过程记录", expanded=False):
-            log_text = interview_details.get("conversation_log", "无面试记录")
-            st.text_area("Log_display", value=log_text, height=200, disabled=True, key=f"log_{selected_interview_id}", label_visibility="collapsed")
+        with st.expander("面试过程记录", expanded=True): # Set expanded=True by default
+            interview_logs_data = []
+            try:
+                logger.debug(f"Report Page: Fetching logs for interview {selected_interview_id}")
+                interview_logs_data = get_interview_logs(selected_interview_id) # This API should now return speaker_role
+                
+                if interview_logs_data:
+                    # No longer need to join into a single string, render each entry individually
+                    for log_entry in interview_logs_data:
+                        speaker_role = log_entry.get('speaker_role')
+                        dialogue_text = log_entry.get('full_dialogue_text', '').strip()
+                        # question_text_snapshot is mainly for the first log entry if it represents the initial question
+                        question_snapshot = log_entry.get('question_text_snapshot')
+                        # order_num = log_entry.get('order_num') # Can be used for more complex numbering if needed
+
+                        if not dialogue_text and not question_snapshot: # Skip empty entries
+                            continue
+
+                        display_text = ""
+                        if speaker_role == "INTERVIEWER":
+                            if question_snapshot: # Typically the first main question
+                                display_text = f"**AI面试官 (提问):**\\n{question_snapshot.replace('\n', '\\n> ')}"
+                                if dialogue_text and dialogue_text != question_snapshot:
+                                    # This case is rare if q_snapshot is the definitive question text for this entry
+                                    display_text += f"\\n\\n**AI面试官 (补充说明):**\\n{dialogue_text.replace('\n', '\\n> ')}"
+                            elif dialogue_text: # Follow-up question by AI
+                                display_text = f"**AI面试官 (追问):**\\n{dialogue_text.replace('\n', '\\n> ')}"
+                        elif speaker_role == "CANDIDATE":
+                            if dialogue_text:
+                                display_text = f"**候选人 (回答):**\\n{dialogue_text.replace('\n', '\\n> ')}"
+                        elif speaker_role == "SYSTEM" and dialogue_text:
+                            display_text = f"**系统消息:**\\n{dialogue_text.replace('\n', '\\n> ')}"
+                        else: # Fallback for logs without a recognized speaker_role or if it's an older log
+                              # We can try to use the old heuristic based on order_num or q_snapshot if needed
+                              # For now, just display the dialogue text if speaker_role is missing/unknown
+                            logger.warning(f"Log entry for interview {selected_interview_id} has unknown/missing speaker_role: {speaker_role}. Raw: {log_entry}")
+                            if question_snapshot: # Likely a question if snapshot exists
+                                display_text = f"**提问:**\\n{question_snapshot.replace('\n', '\\n> ')}"
+                                if dialogue_text and dialogue_text != question_snapshot:
+                                    display_text += f"\\n\\n**补充:**\\n{dialogue_text.replace('\n', '\\n> ')}"
+                            elif dialogue_text:
+                                display_text = f"> {dialogue_text.replace('\n', '\\n> ')}" # Default to simple blockquote
+                        
+                        if display_text:
+                            # Prepend blockquote character '> ' to each line for the main content part
+                            # This is now handled by .replace('\n', '\n> ') and prepending first line with '> '
+                            # However, simpler is to just wrap the content. The f-string above handles titles.
+                            # Let's adjust the f-strings to ensure the content starts with '> ' correctly for multi-line.
+                            
+                            # Corrected approach: Ensure the text starts with "> " if it's meant to be a blockquote content
+                            # The f-strings were modified to produce something like:
+                            # **Role (Type):**
+                            # > Line 1
+                            # > Line 2
+                            # This requires ensuring the first line of dialogue_text/question_snapshot also gets a "> "
+                            # A simple way is to prepend "> " to the text block and then replace internal newlines.
+                            
+                            # Revised text formatting for cleaner blockquotes
+                            final_md_parts = []
+                            if speaker_role == "INTERVIEWER":
+                                if question_snapshot:
+                                    final_md_parts.append(f"**AI面试官 (提问):**")
+                                    final_md_parts.append("> " + question_snapshot.replace('\n', '\n> '))
+                                    if dialogue_text and dialogue_text != question_snapshot:
+                                        final_md_parts.append(f"\n**AI面试官 (补充说明):**")
+                                        final_md_parts.append("> " + dialogue_text.replace('\n', '\n> '))
+                                elif dialogue_text:
+                                    final_md_parts.append(f"**AI面试官 (追问):**")
+                                    final_md_parts.append("> " + dialogue_text.replace('\n', '\n> '))
+                            elif speaker_role == "CANDIDATE":
+                                if dialogue_text:
+                                    final_md_parts.append(f"**候选人 (回答):**")
+                                    final_md_parts.append("> " + dialogue_text.replace('\n', '\n> '))
+                            elif speaker_role == "SYSTEM" and dialogue_text:
+                                final_md_parts.append(f"**系统消息:**")
+                                final_md_parts.append("> " + dialogue_text.replace('\n', '\n> '))
+                            else: # Fallback
+                                logger.warning(f"Log entry for interview {selected_interview_id} has unknown/missing speaker_role: {speaker_role}. Raw: {log_entry}")
+                                if question_snapshot:
+                                    final_md_parts.append(f"**提问:**")
+                                    final_md_parts.append("> " + question_snapshot.replace('\n', '\n> '))
+                                    if dialogue_text and dialogue_text != question_snapshot:
+                                        final_md_parts.append(f"\n**补充:**")
+                                        final_md_parts.append("> " + dialogue_text.replace('\n', '\n> '))
+                                elif dialogue_text:
+                                    final_md_parts.append("> " + dialogue_text.replace('\n', '\n> '))
+                            
+                            if final_md_parts:
+                                st.markdown("\n".join(final_md_parts), unsafe_allow_html=False)
+
+                elif interview_details.get("status") == "LOGGING_COMPLETED":
+                    st.warning("面试记录已完成，但未获取到详细的面试过程对话。可能是数据暂时未同步或记录为空。")
+                else:
+                    st.info("该面试似乎还没有详细的过程记录，或者记录为空。") # Generic message if no logs and status isn't LOGGING_COMPLETED
+            except APIError as e:
+                st.error(f"获取面试过程记录失败: {e.details or e.message}")
+                logger.error(f"APIError fetching logs for interview {selected_interview_id} on report page", exc_info=True)
+            except Exception as e:
+                st.error(f"加载面试过程记录时发生意外错误: {str(e)}")
+                logger.error(f"Unexpected error fetching/processing logs for interview {selected_interview_id} on report page", exc_info=True)
 
         st.divider() # Divider after JD/Resume/Log expanders
 
@@ -267,7 +365,7 @@ def show_report_generation_page():
                     logger.info(f"User initiated GENERATION of report for interview ID: {selected_interview_id}")
                 
                 # Use display_candidate_name and selected_interview_id in the spinner message
-                spinner_message = f"正在为候选人 “{display_candidate_name}” (面试ID: {selected_interview_id}) 生成AI评估报告，请稍候..."
+                spinner_message = "正在为候选人 " + str(display_candidate_name) + " (面试ID: " + str(selected_interview_id) + ") 生成AI评估报告，请稍候..."
                 with st.spinner(spinner_message):
                     try:
                         logger.info(f"Calling generate_report_for_interview_api for interview ID: {selected_interview_id}")

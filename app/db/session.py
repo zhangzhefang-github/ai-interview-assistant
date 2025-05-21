@@ -1,5 +1,6 @@
 import logging # Import logging
 from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import sessionmaker
 
 from app.core.config import settings
@@ -58,4 +59,45 @@ def create_db_and_tables():
 #     # Make sure your database server is running and the database specified in DATABASE_URL exists.
 #     # For MySQL, the database itself must be created manually first (e.g., CREATE DATABASE ai_interview_assistant_db;)
 #     create_db_and_tables()
-#     print("Database tables should be created if they didn't exist.") 
+#     print("Database tables should be created if they didn't exist.")
+
+# Asynchronous engine and session setup (NEW)
+logger.info("Attempting to create SQLAlchemy async engine...")
+ASYNC_DATABASE_URL = settings.DATABASE_URL.replace("mysql+pymysql://", "mysql+aiomysql://")
+# Or if using asyncpg for PostgreSQL: ASYNC_DATABASE_URL = settings.DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
+logger.info(f"Async Database URL: {ASYNC_DATABASE_URL}")
+
+
+try:
+    async_engine = create_async_engine(ASYNC_DATABASE_URL, pool_pre_ping=True)
+    AsyncSessionLocal = async_sessionmaker(
+        bind=async_engine, 
+        class_=AsyncSession, 
+        autocommit=False, 
+        autoflush=False, 
+        expire_on_commit=False
+    )
+    logger.info("SQLAlchemy async engine and AsyncSessionLocal created successfully.")
+except Exception as e:
+    logger.error(f"Error creating SQLAlchemy async engine or AsyncSessionLocal: {e}", exc_info=True)
+    async_engine = None
+    AsyncSessionLocal = None # type: ignore
+
+async def get_async_db() -> AsyncSession: # type: ignore
+    if AsyncSessionLocal is None:
+        logger.error("AsyncSessionLocal is not initialized. Cannot get async DB session.")
+        raise RuntimeError("Async database session factory not initialized.")
+    
+    async with AsyncSessionLocal() as session:
+        try:
+            yield session
+            # By default, we might not want to commit here. 
+            # The endpoint should decide when to commit.
+            # await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        # finally block not strictly needed if using 'async with'
+        # as it handles closing, but can be added for explicit logging if desired.
+        # finally:
+        #     await session.close() # Handled by 'async with' 

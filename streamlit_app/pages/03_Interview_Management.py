@@ -1,6 +1,7 @@
 import streamlit as st
 from streamlit_app.utils.api_client import APIError, get_jobs, get_candidates, create_interview, get_interviews, generate_interview_questions_for_interview, get_questions_for_interview, update_interview_api, delete_interview_api
 from streamlit_app.utils.logger_config import get_logger
+from streamlit_app.utils.ui_helpers import get_status_display_name_zh, InterviewStatusKey, INTERVIEW_STATUS_MAP_ZH
 from datetime import datetime, date, time # Added date and time for input combination
 from typing import Optional
 # Import other necessary API client functions like get_jobs, get_candidates, create_interview etc. later
@@ -29,16 +30,16 @@ if 'generating_questions_for_interview_id' not in st.session_state: # For questi
     st.session_state.generating_questions_for_interview_id = None
 
 # Define status mapping
-STATUS_DISPLAY_MAPPING = {
-    "PENDING_QUESTIONS": "待生成问题",
-    "QUESTIONS_GENERATED": "问题已生成",
-    "SCHEDULED": "已安排",
-    "LOGGING_COMPLETED": "记录已完成",
-    "COMPLETED": "已完成",
-    "CANCELED": "已取消",
-    "REPORT_GENERATED": "报告已生成",
-    # Add other statuses as needed
-}
+# STATUS_DISPLAY_MAPPING = {
+#     "PENDING_QUESTIONS": "待生成问题",
+#     "QUESTIONS_GENERATED": "问题已生成",
+#     "SCHEDULED": "已安排",
+#     "LOGGING_COMPLETED": "记录已完成",
+#     "COMPLETED": "已完成",
+#     "CANCELED": "已取消",
+#     "REPORT_GENERATED": "报告已生成",
+#     # Add other statuses as needed
+# }
 
 @st.dialog("编辑面试信息")
 def edit_interview_dialog(interview: dict):
@@ -56,10 +57,14 @@ def edit_interview_dialog(interview: dict):
         except ValueError:
             logger.warning(f"Could not parse scheduled_at string '{current_scheduled_at_str}' for interview {interview.get('id')}")
 
-    current_status = interview.get('status', "PENDING_QUESTIONS")
+    current_status = interview.get('status', InterviewStatusKey.PENDING_QUESTIONS)
     
-    # Status options for selectbox (use keys from mapping)
-    status_options = list(STATUS_DISPLAY_MAPPING.keys())
+    # Status options for selectbox (use defined keys from InterviewStatusKey or ui_helpers.INTERVIEW_STATUS_MAP_ZH)
+    # Using keys from the imported map ensures all translatable statuses are options
+    status_options = list(INTERVIEW_STATUS_MAP_ZH.keys())
+    # Filter out any internal keys like "UNKNOWN_STATUS" if not desired as selectable options
+    status_options = [key for key in status_options if key != "UNKNOWN_STATUS"]
+
     try:
         current_status_index = status_options.index(current_status) if current_status in status_options else 0
     except ValueError:
@@ -78,7 +83,7 @@ def edit_interview_dialog(interview: dict):
             "面试状态", 
             options=status_options, 
             index=current_status_index,
-            format_func=lambda x: STATUS_DISPLAY_MAPPING.get(x, x)
+            format_func=get_status_display_name_zh
         )
 
         # Buttons in the same row
@@ -262,7 +267,7 @@ def show_interview_management_page():
         else:
             # Custom headers for the interview list - ID first, Job & Candidate before Scheduled Time
             # Column ratios: ID(1), Job(3), Candidate(3), Scheduled(2.5), Status(2), Actions(3.5)
-            cols_header = st.columns([1, 3, 3, 2.5, 2, 3.5]) 
+            cols_header = st.columns([1, 2, 2, 2.5, 4, 3.5]) 
             headers = ["ID", "职位名称", "候选人", "面试时间", "面试状态", "操作"]
             for col, header_text in zip(cols_header, headers):
                 col.markdown(f"**{header_text}**")
@@ -271,7 +276,7 @@ def show_interview_management_page():
 
             for interview in interviews:
                 # Adjusted column ratios and order to match headers
-                cols_data = st.columns([1, 3, 3, 2.5, 2, 3.5]) 
+                cols_data = st.columns([1, 2, 2, 2.5, 4, 3.5]) 
                 interview_id = interview.get('id')
                 
                 job_title = job_map.get(interview.get('job_id'), f"未知职位 (ID: {interview.get('job_id')})")
@@ -287,7 +292,7 @@ def show_interview_management_page():
                         display_scheduled_time = scheduled_at_str
 
                 interview_status_key = interview.get('status', 'N/A')
-                display_status = STATUS_DISPLAY_MAPPING.get(interview_status_key, interview_status_key)
+                display_status = get_status_display_name_zh(interview_status_key)
                 
                 cols_data[0].caption(f"{interview_id}") 
                 cols_data[1].write(job_title) # Moved Job Title to 2nd column
@@ -388,13 +393,13 @@ def show_interview_management_page():
                     status_placeholder = st.empty()
                     # Use candidate_name in the message
                     display_name_for_message = candidate_map.get(interview.get('candidate_id'), f"ID {interview_id}")
-                    status_placeholder.info(f"正在为候选人 “{display_name_for_message}” (面试ID: {interview_id}) 生成AI面试问题，请稍候...", icon="⏳")
+                    status_placeholder.info(f"正在为候选人 \"{display_name_for_message}\" (面试ID: {interview_id}) 生成AI面试问题，请稍候...", icon="⏳")
 
                     try:
                         logger.info(f"Now actually generating questions for interview ID: {interview_id} (Candidate: {display_name_for_message})")
                         response = generate_interview_questions_for_interview(interview_id)
                         num_questions = len(response.get('questions', []))
-                        status_placeholder.success(f"成功为候选人 “{display_name_for_message}” (面试ID: {interview_id}) 生成了 {num_questions} 个问题。状态已更新！", icon="🎉")
+                        status_placeholder.success(f"成功为候选人 \"{display_name_for_message}\" (面试ID: {interview_id}) 生成了 {num_questions} 个问题。状态已更新！", icon="🎉")
                         logger.info(f"Successfully generated {num_questions} questions for interview {interview_id} (Candidate: {display_name_for_message}). API Response: {response}")
                         
                         # Clear the flag for this specific interview
@@ -406,28 +411,89 @@ def show_interview_management_page():
 
                     except APIError as e:
                         logger.error(f"APIError generating questions for interview {interview_id} (Candidate: {display_name_for_message}): {e.message}", exc_info=True)
-                        status_placeholder.error(f"为候选人 “{display_name_for_message}” (面试ID: {interview_id}) 生成问题失败：{e.message}", icon="🚨")
+                        status_placeholder.error(f"为候选人 \"{display_name_for_message}\" (面试ID: {interview_id}) 生成问题失败：{e.message}", icon="🚨")
                         if e.details: st.error(f"详细信息：{e.details}") 
                         st.session_state.generating_questions_for_interview_id = None # Clear flag on error
 
                     except Exception as e:
                         logger.error(f"Unexpected error generating questions for interview {interview_id} (Candidate: {display_name_for_message}): {e}", exc_info=True)
-                        status_placeholder.error(f"为候选人 “{display_name_for_message}” (面试ID: {interview_id}) 生成问题时发生意外错误。", icon="🚨")
+                        status_placeholder.error(f"为候选人 \"{display_name_for_message}\" (面试ID: {interview_id}) 生成问题时发生意外错误。", icon="🚨")
                         st.session_state.generating_questions_for_interview_id = None # Clear flag on error
 
                 # Display questions if this interview is expanded and questions are loaded
                 if st.session_state.expanded_interview_questions == interview_id:
-                    questions_to_display = st.session_state.loaded_questions.get(interview_id)
-                    if questions_to_display is None: # Still loading or error
+                    questions_from_api = st.session_state.loaded_questions.get(interview_id)
+                    if questions_from_api is None: # Still loading or error
                         st.write("问题加载中或加载失败...")
-                    elif not questions_to_display:
+                    elif not questions_from_api:
                         st.info("该面试目前没有问题。请尝试生成问题。")
                     else:
                         with st.expander(f"面试 ID: {interview_id} 的问题列表", expanded=True):
-                            for q_idx, q_data in enumerate(questions_to_display):
-                                st.markdown(f"{q_data.get('order_num', q_idx + 1)}. {q_data.get('question_text')}")
-                            if not questions_to_display: # Should be caught by elif above, but as a fallback
-                                st.caption("没有找到问题。")
+                            processed_questions_for_display = [] # Stores final strings to display
+                            
+                            for q_idx, question_obj_from_api in enumerate(questions_from_api):
+                                # question_obj_from_api is expected to be a dict like {'question_text': '...', 'id': ..., ...}
+                                raw_question_text_field = question_obj_from_api.get('question_text', '')
+                                original_order_num = question_obj_from_api.get('order_num', q_idx + 1)
+
+                                logger.debug(f"Interview {interview_id}, question #{original_order_num}: Raw question_text field: '{raw_question_text_field}'")
+
+                                # Attempt to parse if raw_question_text_field itself is a JSON string
+                                try:
+                                    import json
+                                    # Check if it looks like a JSON object containing a 'questions' list
+                                    if (raw_question_text_field.strip().startswith('{') and 
+                                        raw_question_text_field.strip().endswith('}')):
+                                        
+                                        parsed_json_in_text = json.loads(raw_question_text_field)
+                                        if isinstance(parsed_json_in_text, dict) and \
+                                           'questions' in parsed_json_in_text and \
+                                           isinstance(parsed_json_in_text['questions'], list):
+                                            
+                                            logger.info(f"Interview {interview_id}, question #{original_order_num}: Parsed nested JSON. Extracting questions array.")
+                                            # This question_text field contained a list of questions
+                                            for nested_q_idx, nested_q_text in enumerate(parsed_json_in_text['questions']):
+                                                processed_questions_for_display.append(f"{nested_q_idx + 1}. {nested_q_text}")
+                                            # Since we processed this, continue to the next item from API
+                                            # This assumes one question_text field might contain ALL questions for the interview
+                                            # If each question_text is an individual question, this logic might need adjustment
+                                            # Based on screenshot, it seems ONE question_text field contains the entire JSON string
+                                            # So, after processing it, we might not need to loop further for THIS particular interview_id's display
+                                            # For now, let's assume this is the only structure we need to handle this way.
+                                            # If there could be multiple such JSON strings in questions_from_api, the outer loop is fine.
+                                            # If only ONE item in questions_from_api is expected to hold this JSON, we could break or clear questions_from_api.
+                                            # Let's refine if needed, for now this will extract and add them.
+                                            # We should probably clear processed_questions_for_display at the start of the expander for each interview viewing
+                                            # if this scenario means all questions are in one field.
+                                            # For now, just add them.
+                                            # Break the inner loop if all questions were in this one field
+                                            # If this IS the case, then question_from_api should only have ONE element. 
+                                            # We should ensure the display list is only populated once with these questions.
+                                            # This implies we should clear and then populate processed_questions_for_display here only.
+                                            processed_questions_for_display = [f"{i+1}. {q}" for i, q in enumerate(parsed_json_in_text['questions'])]
+                                            logger.debug(f"Interview {interview_id}: Display list replaced with {len(processed_questions_for_display)} questions from nested JSON.")
+                                            break # Exit the loop over questions_from_api as we found the JSON blob
+                                        else:
+                                            # It was a JSON string, but not the expected structure, treat as plain text
+                                            logger.warning(f"Interview {interview_id}, question #{original_order_num}: question_text was JSON but not {{'questions': [...]}}. Treating as plain text.")
+                                            processed_questions_for_display.append(f"{original_order_num}. {raw_question_text_field}")
+                                    else:
+                                        # Not a JSON string, treat as plain text
+                                        processed_questions_for_display.append(f"{original_order_num}. {raw_question_text_field}")
+                                except json.JSONDecodeError:
+                                    logger.warning(f"Interview {interview_id}, question #{original_order_num}: question_text is not valid JSON. Treating as plain text: '{raw_question_text_field[:100]}...'")
+                                    processed_questions_for_display.append(f"{original_order_num}. {raw_question_text_field}")
+                                except Exception as e_parse:
+                                    logger.error(f"Interview {interview_id}, question #{original_order_num}: Unexpected error parsing question_text '{raw_question_text_field[:100]}...': {e_parse}", exc_info=True)
+                                    processed_questions_for_display.append(f"{original_order_num}. {raw_question_text_field}") # Fallback to raw
+                            
+                            # Display all processed questions
+                            if processed_questions_for_display:
+                                for q_text_to_show in processed_questions_for_display:
+                                    st.markdown(q_text_to_show)
+                            else:
+                                # This case might happen if questions_from_api was not empty but processing resulted in empty list (e.g. JSON was empty list)
+                                st.info("解析后没有可显示的问题。") # Changed message
                 st.markdown("---") # Separator between interview entries
 
     except APIError as e:

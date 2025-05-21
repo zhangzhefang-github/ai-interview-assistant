@@ -1,0 +1,46 @@
+
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8
+    container_name: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: interview_db
+      MYSQL_USER: interview_user
+      MYSQL_PASSWORD: interview_pass
+    volumes:
+      - mysql_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+
+  backend:
+    build:
+      context: .
+      dockerfile: app/Dockerfile
+    container_name: backend
+    environment:
+      - DATABASE_URL=mysql+pymysql://interview_user:interview_pass@mysql:3306/interview_db
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
+    depends_on:
+      - mysql
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: streamlit_app/Dockerfile
+    container_name: frontend
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - BACKEND_URL=http://backend:8000
+    depends_on:
+      - backend
+    ports:
+      - "8501:8501"
+
+volumes:
+  mysql_data:

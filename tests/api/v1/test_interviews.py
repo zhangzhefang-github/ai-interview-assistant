@@ -5,6 +5,11 @@ import pytest
 from unittest.mock import patch, AsyncMock
 from sqlalchemy.orm import Session
 
+import httpx # Added for SSE client
+import json # Added for parsing SSE data
+
+from app.db.models import InterviewStatus # Added for status comparison
+
 # client fixture is automatically available from tests/conftest.py
 
 # Helper function to create a job and return its ID
@@ -268,7 +273,7 @@ def test_update_interview_not_found(client: TestClient):
     assert response.json() == {"detail": "Interview not found"}
 
 # TODO: Add test for delete_interview (DELETE /{interview_id})
-def test_delete_interview_success(client: TestClient):
+def test_delete_interview_success(client: TestClient, db_session_test: Session):
     """Test successfully deleting an interview."""
     job_id = create_test_job(client, title="Job For Delete Interview")
     candidate_id = create_test_candidate(client, email="delete.interview@example.com")
@@ -284,6 +289,9 @@ def test_delete_interview_success(client: TestClient):
     # Verify it's gone
     response_get = client.get(f"/api/v1/interviews/{interview_id}")
     assert response_get.status_code == status.HTTP_404_NOT_FOUND
+
+    # Verify deletion from DB
+    assert db_session_test.query(models.Interview).filter(models.Interview.id == interview_id).first() is None
 
 def test_delete_interview_not_found(client: TestClient):
     """Test deleting an interview that does not exist."""
@@ -355,15 +363,15 @@ async def test_generate_questions_for_interview_success(client: TestClient, db_s
             assert q_data["order_num"] == i + 1
 
 @pytest.mark.asyncio
-async def test_generate_questions_interview_not_found(client: TestClient):
+async def test_generate_questions_interview_not_found(client: TestClient, app_lifespan_mock):
     """Test generating questions for a non-existent interview."""
     # No need to mock AI services if the interview isn't found first.
     response = client.post("/api/v1/interviews/99999/generate-questions") # Non-existent ID
     assert response.status_code == status.HTTP_404_NOT_FOUND
-    # mock_ai_call.assert_not_called() # mock_ai_call is not defined here, so remove this
+    assert response.json()["detail"] == "Interview not found"
 
 @pytest.mark.asyncio
-async def test_generate_questions_missing_jd(client: TestClient, db_session_test: Session):
+async def test_generate_questions_missing_jd(client: TestClient, db_session_test: Session, app_lifespan_mock):
     """Test generating questions when the job description is missing."""
     job_response = client.post("/api/v1/jobs/", json={"title": "Job Missing JD", "description": ""})
     assert job_response.status_code == status.HTTP_201_CREATED
@@ -378,10 +386,10 @@ async def test_generate_questions_missing_jd(client: TestClient, db_session_test
     # No need to mock AI services if the prerequisite data is missing.
     response = client.post(f"/api/v1/interviews/{interview_id}/generate-questions")
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "Job description (JD) not found for this interview." in response.json()["detail"]
+    assert response.json()["detail"] == "Job description (JD) not found for this interview."
 
 @pytest.mark.asyncio
-async def test_generate_questions_missing_resume(client: TestClient, db_session_test: Session):
+async def test_generate_questions_missing_resume(client: TestClient, db_session_test: Session, app_lifespan_mock):
     """Test generating questions when the candidate resume is missing."""
     job_id = create_test_job(client, title="Job For Missing Resume Test")
     cand_response = client.post("/api/v1/candidates/", json={"name": "Cand Missing Resume", "email": "missingresume.cand@example.com", "resume_text": ""})
@@ -395,10 +403,10 @@ async def test_generate_questions_missing_resume(client: TestClient, db_session_
 
     response = client.post(f"/api/v1/interviews/{interview_id}/generate-questions")
     assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "Candidate resume text not found" in response.json()["detail"] # Adjusted assertion text based on previous logs
+    assert response.json()["detail"] == "Candidate resume text not found for this interview."
 
 @pytest.mark.asyncio
-async def test_generate_questions_ai_service_fails(client: TestClient):
+async def test_generate_questions_ai_service_fails(client: TestClient, db_session_test: Session, app_lifespan_mock):
     """Test error handling when the AI service call fails."""
     job_id = create_test_job(client, title="Job For AI Fail", desc="JD for AI Fail")
     candidate_id = create_test_candidate(client, email="aifail.cand@example.com", resume_text="Resume for AI Fail")
@@ -422,7 +430,7 @@ async def test_generate_questions_ai_service_fails(client: TestClient):
         mock_gen_questions_fail.assert_called_once_with(analyzed_jd_info="Analyzed JD for AI Fail", structured_resume_info="Parsed Resume for AI Fail")
 
 @pytest.mark.asyncio
-async def test_generate_questions_ai_returns_empty_list(client: TestClient):
+async def test_generate_questions_ai_returns_empty_list(client: TestClient, db_session_test: Session, app_lifespan_mock):
     """Test when AI service returns an empty string (representing no questions)."""
     job_id = create_test_job(client, title="Job For AI Empty", desc="JD for AI Empty")
     candidate_id = create_test_candidate(client, email="aiempty.cand@example.com", resume_text="Resume for AI Empty")
@@ -489,3 +497,617 @@ def test_get_questions_for_interview_not_found(client: TestClient):
     response_get_q = client.get(f"/api/v1/interviews/{non_existent_interview_id}/questions")
     assert response_get_q.status_code == status.HTTP_404_NOT_FOUND
     assert response_get_q.json() == {"detail": "Interview not found"} 
+
+# It's good practice to define expected AG-UI event types, possibly from your schemas
+# For now, we'll use string literals.
+AG_UI_EVENT_TYPE_TASK_START = "task_start"
+AG_UI_EVENT_TYPE_THOUGHT = "thought"
+AG_UI_EVENT_TYPE_QUESTION_GENERATED = "question_generated"
+AG_UI_EVENT_TYPE_TASK_END = "task_end"
+AG_UI_EVENT_TYPE_ERROR = "error" # Although not used in success test, good to have
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_success(async_app_client: httpx.AsyncClient, client: TestClient, db_session_test: Session):
+    """
+    Test successful question generation via SSE stream.
+    Verifies AG-UI events, database updates, and interview status.
+    """
+    # 1. Create Job, Candidate, and Interview
+    job_id = create_test_job(client, title="SSE Stream Job", desc="JD for SSE stream test: Python, FastAPI, SSE")
+    candidate_id = create_test_candidate(client, email="sse.stream.candidate@example.com", resume_text="Resume for SSE stream test: Experienced Python dev with SSE knowledge")
+    
+    response_create_interview = client.post(
+        "/api/v1/interviews/",
+        json={"job_id": job_id, "candidate_id": candidate_id, "status": "PENDING_QUESTIONS"}
+    )
+    assert response_create_interview.status_code == status.HTTP_201_CREATED
+    interview_id = response_create_interview.json()["id"]
+
+    # 2. Mock AI Service calls
+    mock_analyzed_jd = "Analyzed JD: Key skills - Python, FastAPI, SSE. Experience needed."
+    mock_parsed_resume = "Parsed Resume: Candidate has Python and SSE experience."
+    mock_generated_questions_text = (
+        "What is SSE?\\n"
+        "How does FastAPI support streaming responses?\\n"
+        "Explain a use case for SSE."
+    )
+    expected_questions = [
+        "What is SSE?",
+        "How does FastAPI support streaming responses?",
+        "Explain a use case for SSE."
+    ]
+
+    # Ensure the paths in patch match the actual location of these functions
+    # as used by the generate_question_events_stream generator.
+    with patch("app.api.v1.endpoints.interviews.analyze_jd", AsyncMock(return_value=mock_analyzed_jd)) as mock_ai_jd, \
+         patch("app.api.v1.endpoints.interviews.parse_resume", AsyncMock(return_value=mock_parsed_resume)) as mock_ai_resume, \
+         patch("app.api.v1.endpoints.interviews.generate_interview_questions", AsyncMock(return_value=mock_generated_questions_text)) as mock_ai_questions:
+
+        # 3. Call the SSE endpoint using the new async_app_client fixture
+        # async with httpx.AsyncClient(app=client.app, base_url="http://testserver") as async_client:
+        response = await async_app_client.post(f"/api/v1/interviews/{interview_id}/generate-questions-stream")
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert "text/event-stream" in response.headers["content-type"].lower()
+
+        # 4. Collect and parse SSE events
+        received_events = []
+        raw_event_chunks_for_debug = [] 
+        async for line in response.aiter_lines(): # aiter_lines yields strings
+            raw_event_chunks_for_debug.append(line)
+            if line.startswith("data:"):
+                event_data_str = line[len("data:"):].strip()
+                try:
+                    event_payload = json.loads(event_data_str)
+                    received_events.append(event_payload)
+                except json.JSONDecodeError:
+                    pytest.fail(f"Failed to parse SSE event JSON: {event_data_str}. Raw lines: {raw_event_chunks_for_debug}")
+
+        # 5. Assert AG-UI events
+        assert len(received_events) > 0, f"No SSE events received. Raw chunks for debug: {raw_event_chunks_for_debug}"
+
+        task_start_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_START), None)
+        assert task_start_event is not None, "TASK_START event not found"
+        task_id = task_start_event["payload"]["task_id"]
+        assert task_id, "Task ID missing in TASK_START"
+        assert task_start_event["payload"]["task_name"] == "generate_interview_questions"
+
+        thought_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_THOUGHT and e.get("payload", {}).get("task_id") == task_id]
+        # Expect thoughts for: accessing JD/resume, analyzing JD, parsed resume, generating questions
+        assert len(thought_events) >= 4, f"Expected at least 4 THOUGHT events, got {len(thought_events)}"
+
+        question_generated_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_QUESTION_GENERATED and e.get("payload", {}).get("task_id") == task_id]
+        assert len(question_generated_events) == len(expected_questions), f"Expected {len(expected_questions)} QUESTION_GENERATED events, got {len(question_generated_events)}"
+        
+        # Sort events by question_order before asserting, as they might arrive out of order if generated concurrently (though unlikely here)
+        for i, q_event in enumerate(sorted(question_generated_events, key=lambda x: x["payload"]["question_order"])):
+            assert q_event["payload"]["question_text"] == expected_questions[i]
+            assert q_event["payload"]["question_order"] == i + 1
+            assert q_event["payload"]["total_questions"] == len(expected_questions)
+
+        task_end_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_END and e.get("payload", {}).get("task_id") == task_id), None)
+        assert task_end_event is not None, "TASK_END event not found"
+        assert task_end_event["payload"]["status"] == "success"
+        assert task_end_event["payload"]["message"] == f"Generated {len(expected_questions)} questions for interview {interview_id}."
+        assert len(task_end_event["payload"]["final_questions"]) == len(expected_questions)
+        # Sort final questions by order before asserting
+        for i, q_data in enumerate(sorted(task_end_event["payload"]["final_questions"], key=lambda x: x["order"])):
+            assert q_data["text"] == expected_questions[i]
+            assert q_data["order"] == i + 1
+            
+        # Verify AI service calls
+        mock_ai_jd.assert_awaited_once()
+        mock_ai_resume.assert_awaited_once()
+        # Check arguments passed to the mock AI question generation
+        mock_ai_questions.assert_awaited_once_with(
+            analyzed_jd_info=mock_analyzed_jd, 
+            structured_resume_info=mock_parsed_resume
+        )
+
+    # 6. Assert Database changes
+    response_get_interview = client.get(f"/api/v1/interviews/{interview_id}")
+    assert response_get_interview.status_code == status.HTTP_200_OK
+    interview_details = response_get_interview.json()
+
+    # 7. Assert Interview Status
+    # Ensure this matches models.InterviewStatus.QUESTIONS_GENERATED.value if using an enum
+    assert interview_details["status"] == "QUESTIONS_GENERATED" 
+
+    response_get_questions = client.get(f"/api/v1/interviews/{interview_id}/questions")
+    assert response_get_questions.status_code == status.HTTP_200_OK
+    saved_questions_from_api = response_get_questions.json()
+    
+    assert len(saved_questions_from_api) == len(expected_questions)
+    for i, saved_q in enumerate(sorted(saved_questions_from_api, key=lambda q: q["order_num"])):
+        assert saved_q["question_text"] == expected_questions[i]
+        assert saved_q["interview_id"] == interview_id
+        assert saved_q["order_num"] == i + 1
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_interview_not_found(async_app_client: httpx.AsyncClient):
+    """
+    Test SSE stream when the interview ID does not exist.
+    Expected: An ERROR AG-UI event after TASK_START.
+    """
+    non_existent_interview_id = 999999 # A very unlikely ID to exist
+
+    response = await async_app_client.post(f"/api/v1/interviews/{non_existent_interview_id}/generate-questions-stream")
+    
+    assert response.status_code == status.HTTP_200_OK # Stream connection itself is okay
+    assert "text/event-stream" in response.headers["content-type"].lower()
+
+    received_events = []
+    raw_event_chunks_for_debug = []
+    async for line in response.aiter_lines():
+        raw_event_chunks_for_debug.append(line)
+        if line.startswith("data:"):
+            event_data_str = line[len("data:") :].strip()
+            try:
+                event_payload = json.loads(event_data_str)
+                received_events.append(event_payload)
+            except json.JSONDecodeError:
+                pytest.fail(f"Failed to parse SSE event JSON: {event_data_str}. Raw lines: {raw_event_chunks_for_debug}")
+
+    assert len(received_events) > 0, f"No SSE events received. Raw chunks for debug: {raw_event_chunks_for_debug}"
+
+    # Expect TASK_START first
+    task_start_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_START), None)
+    assert task_start_event is not None, "TASK_START event not found"
+    task_id = task_start_event["payload"]["task_id"]
+    assert task_id, "Task ID missing in TASK_START event"
+
+    # Then expect an ERROR event for this task_id
+    error_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_ERROR and e.get("payload", {}).get("task_id") == task_id), None)
+    assert error_event is not None, "ERROR AG-UI event not found in stream for the correct task_id"
+    
+    # Verify the error message content based on the implementation in generate_question_events_stream
+    # The stream yields: schemas.AgUiSsePayload(event_type=schemas.AgUiEventType.ERROR, payload=schemas.AgUiErrorData(task_id=task_id, message=f"Interview {interview_id} not found.").model_dump()).to_sse_format()
+    # The payload for AgUiErrorData contains 'message'.
+    assert f"Interview {non_existent_interview_id} not found" in error_event["payload"]["message"]
+    
+    # Ensure no QUESTION_GENERATED or successful TASK_END events for this task_id
+    question_generated_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_QUESTION_GENERATED and e.get("payload", {}).get("task_id") == task_id]
+    assert len(question_generated_events) == 0, "QUESTION_GENERATED event found for non-existent interview"
+
+    successful_task_end_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_END and e.get("payload", {}).get("status") == "success" and e.get("payload", {}).get("task_id") == task_id), None)
+    assert successful_task_end_event is None, "Successful TASK_END event found for non-existent interview"
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_missing_jd(
+    async_app_client: httpx.AsyncClient, client: TestClient, db_session_test: Session # Added db_session_test for completeness, though not directly used yet
+):
+    """
+    Test SSE stream when the interview's job is missing a description.
+    Expected: An ERROR AG-UI event after TASK_START and initial THOUGHT.
+    """
+    # 1. Create Job (with empty description), Candidate, and Interview
+    job_id_missing_jd = create_test_job(client, title="Job Missing JD Stream", desc="") # Empty description
+    candidate_id = create_test_candidate(client, email="missingjd.stream@example.com", resume_text="Valid resume for missing JD test")
+    
+    response_create_interview = client.post(
+        "/api/v1/interviews/",
+        json={"job_id": job_id_missing_jd, "candidate_id": candidate_id, "status": "PENDING_QUESTIONS"}
+    )
+    assert response_create_interview.status_code == status.HTTP_201_CREATED
+    interview_id = response_create_interview.json()["id"]
+    original_interview_status = response_create_interview.json()["status"]
+
+    # 2. Call SSE endpoint (No AI mocking needed as it should fail before AI calls)
+    response = await async_app_client.post(f"/api/v1/interviews/{interview_id}/generate-questions-stream")
+    
+    assert response.status_code == status.HTTP_200_OK
+    assert "text/event-stream" in response.headers["content-type"].lower()
+
+    # 3. Collect and parse SSE events
+    received_events = []
+    raw_event_chunks_for_debug = []
+    async for line in response.aiter_lines():
+        raw_event_chunks_for_debug.append(line)
+        if line.startswith("data:"):
+            event_data_str = line[len("data:") :].strip()
+            try:
+                event_payload = json.loads(event_data_str)
+                received_events.append(event_payload)
+            except json.JSONDecodeError:
+                pytest.fail(f"Failed to parse SSE event JSON: {event_data_str}. Raw lines: {raw_event_chunks_for_debug}")
+
+    assert len(received_events) > 0, f"No SSE events received. Raw chunks for debug: {raw_event_chunks_for_debug}"
+
+    # 4. Assert AG-UI Events
+    task_start_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_START), None)
+    assert task_start_event is not None, "TASK_START event not found"
+    task_id = task_start_event["payload"]["task_id"]
+    assert task_id, "Task ID missing in TASK_START event"
+
+    # Check for the initial "Accessing job description and candidate resume..." thought
+    initial_thought = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_THOUGHT and \
+                            e.get("payload", {}).get("task_id") == task_id and \
+                            "Accessing job description" in e.get("payload",{}).get("thought","")), None)
+    assert initial_thought is not None, "Initial 'Accessing' THOUGHT event not found"
+
+    error_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_ERROR and e.get("payload", {}).get("task_id") == task_id), None)
+    assert error_event is not None, "ERROR AG-UI event not found for the correct task_id"
+    # Based on generate_question_events_stream: payload=schemas.AgUiErrorData(task_id=task_id, message="Job description not found.")
+    assert error_event["payload"]["message"] == "Job description not found."
+
+    # Ensure no QUESTION_GENERATED or successful TASK_END for this task_id
+    question_generated_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_QUESTION_GENERATED and e.get("payload", {}).get("task_id") == task_id]
+    assert len(question_generated_events) == 0, "QUESTION_GENERATED event found when JD was missing"
+
+    successful_task_end_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_END and \
+                                     e.get("payload", {}).get("status") == "success" and \
+                                     e.get("payload", {}).get("task_id") == task_id), None)
+    assert successful_task_end_event is None, "Successful TASK_END event found when JD was missing"
+
+    # 5. Assert Database state (status should not change, no questions created)
+    response_get_interview = client.get(f"/api/v1/interviews/{interview_id}")
+    assert response_get_interview.status_code == status.HTTP_200_OK
+    interview_details = response_get_interview.json()
+    assert interview_details["status"] == original_interview_status # Status should remain unchanged
+
+    response_get_questions = client.get(f"/api/v1/interviews/{interview_id}/questions")
+    assert response_get_questions.status_code == status.HTTP_200_OK
+    assert response_get_questions.json() == [] # No questions should be created
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_missing_resume(
+    async_app_client: httpx.AsyncClient, client: TestClient, db_session_test: Session
+):
+    """
+    Test SSE stream when the interview's candidate is missing resume text.
+    Expected: An ERROR AG-UI event after initial THOUGHTS (including JD analysis).
+    """
+    # 1. Create Job, Candidate (with empty resume), and Interview
+    job_id = create_test_job(client, title="Job For Missing Resume Stream", desc="Valid JD for missing resume test")
+    # Create candidate with empty resume text
+    candidate_id_missing_resume = create_test_candidate(client, email="missingresume.stream@example.com", name="Missing Resume Cand", resume_text="") 
+    
+    response_create_interview = client.post(
+        "/api/v1/interviews/",
+        json={"job_id": job_id, "candidate_id": candidate_id_missing_resume, "status": "PENDING_QUESTIONS"}
+    )
+    assert response_create_interview.status_code == status.HTTP_201_CREATED
+    interview_id = response_create_interview.json()["id"]
+    original_interview_status = response_create_interview.json()["status"]
+
+    # Mock analyze_jd as it should be called before the resume check fails
+    mock_analyzed_jd_return_value = "Analyzed JD: Key skills - Python. Experience required."
+    # Patch the correct path for analyze_jd within the interviews endpoint module
+    with patch("app.api.v1.endpoints.interviews.analyze_jd", AsyncMock(return_value=mock_analyzed_jd_return_value)) as mock_ai_analyze_jd:
+        
+        # 2. Call SSE endpoint
+        response = await async_app_client.post(f"/api/v1/interviews/{interview_id}/generate-questions-stream")
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert "text/event-stream" in response.headers["content-type"].lower()
+
+        # 3. Collect and parse SSE events
+        received_events = []
+        raw_event_chunks_for_debug = []
+        async for line in response.aiter_lines():
+            raw_event_chunks_for_debug.append(line)
+            if line.startswith("data:"):
+                event_data_str = line[len("data:") :].strip()
+                try:
+                    event_payload = json.loads(event_data_str)
+                    received_events.append(event_payload)
+                except json.JSONDecodeError:
+                    pytest.fail(f"Failed to parse SSE event JSON: {event_data_str}. Raw lines: {raw_event_chunks_for_debug}")
+        
+        assert len(received_events) > 0, f"No SSE events received. Raw chunks for debug: {raw_event_chunks_for_debug}"
+
+        # 4. Assert AG-UI Events
+        task_start_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_START), None)
+        assert task_start_event is not None, "TASK_START event not found"
+        task_id = task_start_event["payload"]["task_id"]
+        assert task_id, "Task ID missing in TASK_START event"
+
+        # Check for THOUGHT events (at least accessing data and JD analysis thought)
+        thought_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_THOUGHT and e.get("payload", {}).get("task_id") == task_id]
+        # Expect thoughts for: Accessing, Analyzing JD, JD analysis complete, (then attempt parsing resume before error)
+        assert len(thought_events) >= 2, f"Expected at least 2 THOUGHT events before resume error, got {len(thought_events)}"
+        
+        # Verify analyze_jd was called
+        mock_ai_analyze_jd.assert_awaited_once()
+        # To be more precise, check it was called with the correct JD from the created job
+        # created_job_details = client.get(f"/api/v1/jobs/{job_id}").json()
+        # mock_ai_analyze_jd.assert_awaited_once_with(jd_text=created_job_details["description"])
+
+        error_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_ERROR and e.get("payload", {}).get("task_id") == task_id), None)
+        assert error_event is not None, "ERROR AG-UI event not found for the correct task_id"
+        # Based on stream: payload=AgUiErrorData(task_id=task_id, message=f"AI service failed to analyze JD: {analyzed_jd_text}")
+        assert f"AI service failed to analyze JD: {mock_analyzed_jd_return_value}" == error_event["payload"]["message"]
+
+        # 6. Assert AI service calls
+        mock_ai_analyze_jd.assert_awaited_once()
+        mock_ai_parse_resume.assert_not_awaited() # Should not be called
+        mock_ai_generate_questions.assert_not_awaited() # Should not be called
+
+        # Ensure no QUESTION_GENERATED or successful TASK_END for this task_id
+        question_generated_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_QUESTION_GENERATED and e.get("payload", {}).get("task_id") == task_id]
+        assert len(question_generated_events) == 0
+        successful_task_end_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_END and \
+                                         e.get("payload", {}).get("status") == "success" and \
+                                         e.get("payload", {}).get("task_id") == task_id), None)
+        assert successful_task_end_event is None
+
+    # 7. Assert Database state (status should not change, no questions created)
+    response_get_interview = client.get(f"/api/v1/interviews/{interview_id}")
+    assert response_get_interview.status_code == status.HTTP_200_OK
+    interview_details = response_get_interview.json()
+    assert interview_details["status"] == original_interview_status
+
+    response_get_questions = client.get(f"/api/v1/interviews/{interview_id}/questions")
+    assert response_get_questions.status_code == status.HTTP_200_OK
+    assert response_get_questions.json() == []
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_ai_parse_resume_fails(
+    async_app_client: httpx.AsyncClient, client: TestClient, db_session_test: Session
+):
+    """
+    Test SSE stream when the parse_resume AI service call fails.
+    Expected: An ERROR AG-UI event after JD analysis thoughts.
+    """
+    # 1. Setup
+    job_id = create_test_job(client, title="Job For AI Resume Fail Stream", desc="Valid JD for AI resume fail test")
+    candidate_id = create_test_candidate(client, email="airesumefail.stream@example.com", resume_text="Valid resume for AI resume fail test")
+    
+    response_create_interview = client.post(
+        "/api/v1/interviews/",
+        json={"job_id": job_id, "candidate_id": candidate_id, "status": "PENDING_QUESTIONS"}
+    )
+    assert response_create_interview.status_code == status.HTTP_201_CREATED
+    interview_id = response_create_interview.json()["id"]
+    original_interview_status = response_create_interview.json()["status"]
+
+    mock_analyzed_jd_success = "Analyzed JD: All good."
+    # Ensure mock error starts with "Error:" as per current error handling in the stream generator
+    ai_error_message_resume = "Error: Resume parsing module failed spectacularly."
+
+    # 2. Mock AI services: analyze_jd succeeds, parse_resume fails.
+    with patch("app.api.v1.endpoints.interviews.analyze_jd", AsyncMock(return_value=mock_analyzed_jd_success)) as mock_ai_analyze_jd, \
+         patch("app.api.v1.endpoints.interviews.parse_resume", AsyncMock(return_value=ai_error_message_resume)) as mock_ai_parse_resume, \
+         patch("app.api.v1.endpoints.interviews.generate_interview_questions", AsyncMock()) as mock_ai_generate_questions:
+
+        # 3. Call SSE endpoint
+        response = await async_app_client.post(f"/api/v1/interviews/{interview_id}/generate-questions-stream")
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert "text/event-stream" in response.headers["content-type"].lower()
+
+        # 4. Collect and parse SSE events
+        received_events = []
+        raw_event_chunks_for_debug = []
+        async for line in response.aiter_lines():
+            raw_event_chunks_for_debug.append(line)
+            if line.startswith("data:"):
+                event_data_str = line[len("data:") :].strip()
+                try:
+                    event_payload = json.loads(event_data_str)
+                    received_events.append(event_payload)
+                except json.JSONDecodeError:
+                    pytest.fail(f"Failed to parse SSE event JSON: {event_data_str}. Raw lines: {raw_event_chunks_for_debug}")
+        
+        assert len(received_events) > 0, f"No SSE events received. Raw chunks for debug: {raw_event_chunks_for_debug}"
+
+        # 5. Assert AG-UI Events
+        task_start_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_START), None)
+        assert task_start_event is not None, "TASK_START event not found"
+        task_id = task_start_event["payload"]["task_id"]
+        assert task_id, "Task ID missing in TASK_START event"
+
+        thought_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_THOUGHT and e.get("payload", {}).get("task_id") == task_id]
+        # Expect thoughts: Accessing, Analyzing JD, JD complete, Parsing resume (before error)
+        assert len(thought_events) >= 3, f"Expected at least 3 THOUGHT events before parse_resume error, got {len(thought_events)}"
+
+        error_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_ERROR and e.get("payload", {}).get("task_id") == task_id), None)
+        assert error_event is not None, "ERROR AG-UI event not found for the correct task_id"
+        # Based on stream: payload=AgUiErrorData(task_id=task_id, message=f"AI service failed to parse resume: {parsed_resume_text}")
+        assert f"AI service failed to parse resume: {ai_error_message_resume}" == error_event["payload"]["message"]
+
+        # 6. Assert AI service calls
+        mock_ai_analyze_jd.assert_awaited_once()
+        mock_ai_parse_resume.assert_awaited_once()
+        mock_ai_generate_questions.assert_not_awaited() # Should not be called
+
+        # Ensure no QUESTION_GENERATED or successful TASK_END
+        question_generated_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_QUESTION_GENERATED and e.get("payload", {}).get("task_id") == task_id]
+        assert len(question_generated_events) == 0
+        successful_task_end_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_END and \
+                                         e.get("payload", {}).get("status") == "success" and \
+                                         e.get("payload", {}).get("task_id") == task_id), None)
+        assert successful_task_end_event is None
+
+    # 7. Assert Database state
+    response_get_interview = client.get(f"/api/v1/interviews/{interview_id}")
+    assert response_get_interview.status_code == status.HTTP_200_OK
+    interview_details = response_get_interview.json()
+    assert interview_details["status"] == original_interview_status
+
+    response_get_questions = client.get(f"/api/v1/interviews/{interview_id}/questions")
+    assert response_get_questions.status_code == status.HTTP_200_OK
+    assert response_get_questions.json() == []
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_ai_generate_questions_fails(
+    async_app_client: httpx.AsyncClient, client: TestClient, db_session_test: Session
+):
+    """
+    Test SSE stream when the generate_interview_questions AI service call raises an exception.
+    Expected: An ERROR AG-UI event with details of the unexpected error.
+    """
+    # 1. Setup
+    job_id = create_test_job(client, title="Job For AI GenQ Fail Stream", desc="Valid JD")
+    candidate_id = create_test_candidate(client, email="aigenqfail.stream@example.com", resume_text="Valid resume")
+    
+    response_create_interview = client.post(
+        "/api/v1/interviews/",
+        json={"job_id": job_id, "candidate_id": candidate_id, "status": "PENDING_QUESTIONS"}
+    )
+    assert response_create_interview.status_code == status.HTTP_201_CREATED
+    interview_id = response_create_interview.json()["id"]
+    original_interview_status = response_create_interview.json()["status"]
+
+    mock_analyzed_jd_success = "Analyzed JD: Looks good."
+    mock_parsed_resume_success = "Parsed Resume: All clear."
+    # This specific error message will be part of the exception raised by the mock
+    ai_exception_message_gen_q = "Question generation engine malfunction."
+
+    # 2. Mock AI services: analyze_jd and parse_resume succeed, generate_interview_questions raises an exception.
+    with patch("app.api.v1.endpoints.interviews.analyze_jd", AsyncMock(return_value=mock_analyzed_jd_success)) as mock_ai_analyze_jd, \
+         patch("app.api.v1.endpoints.interviews.parse_resume", AsyncMock(return_value=mock_parsed_resume_success)) as mock_ai_parse_resume, \
+         patch("app.api.v1.endpoints.interviews.generate_interview_questions", AsyncMock(side_effect=Exception(ai_exception_message_gen_q))) as mock_ai_generate_questions:
+
+        # 3. Call SSE endpoint
+        response = await async_app_client.post(f"/api/v1/interviews/{interview_id}/generate-questions-stream")
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert "text/event-stream" in response.headers["content-type"].lower()
+
+        # 4. Collect and parse SSE events
+        received_events = []
+        raw_event_chunks_for_debug = []
+        async for line in response.aiter_lines():
+            raw_event_chunks_for_debug.append(line)
+            if line.startswith("data:"):
+                event_data_str = line[len("data:") :].strip()
+                try:
+                    event_payload = json.loads(event_data_str)
+                    received_events.append(event_payload)
+                except json.JSONDecodeError:
+                    pytest.fail(f"Failed to parse SSE event JSON: {event_data_str}. Raw lines: {raw_event_chunks_for_debug}")
+        
+        assert len(received_events) > 0, f"No SSE events received. Raw chunks for debug: {raw_event_chunks_for_debug}"
+
+        # 5. Assert AG-UI Events
+        task_start_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_START), None)
+        assert task_start_event is not None, "TASK_START event not found"
+        task_id = task_start_event["payload"]["task_id"]
+        assert task_id, "Task ID missing in TASK_START event"
+
+        thought_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_THOUGHT and e.get("payload", {}).get("task_id") == task_id]
+        # Expect thoughts: Accessing, Analyzing JD, JD complete, Parsing resume, Resume complete, Generating questions (before exception)
+        assert len(thought_events) >= 4, f"Expected at least 4 THOUGHT events before generate_questions exception, got {len(thought_events)}"
+
+        error_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_ERROR and e.get("payload", {}).get("task_id") == task_id), None)
+        assert error_event is not None, "ERROR AG-UI event not found for the correct task_id"
+        
+        # Check the error message from the AgUiErrorData schema which has 'error_message'
+        # The stream's generic exception handler yields: AgUiErrorData(task_id=task_id, error_message=f"An unexpected error occurred: {str(e)}")
+        assert "error_message" in error_event["payload"], "'error_message' field missing in ERROR event payload"
+        assert "An unexpected error occurred" in error_event["payload"]["error_message"]
+        assert ai_exception_message_gen_q in error_event["payload"]["error_message"]
+
+        # 6. Assert AI service calls
+        mock_ai_analyze_jd.assert_awaited_once()
+        mock_ai_parse_resume.assert_awaited_once()
+        mock_ai_generate_questions.assert_awaited_once() # It was called and it raised an exception
+
+        # Ensure no QUESTION_GENERATED or successful TASK_END
+        question_generated_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_QUESTION_GENERATED and e.get("payload", {}).get("task_id") == task_id]
+        assert len(question_generated_events) == 0
+        successful_task_end_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_END and \
+                                         e.get("payload", {}).get("status") == "success" and \
+                                         e.get("payload", {}).get("task_id") == task_id), None)
+        assert successful_task_end_event is None
+
+    # 7. Assert Database state (status should not change due to db.rollback(), no questions created)
+    response_get_interview = client.get(f"/api/v1/interviews/{interview_id}")
+    assert response_get_interview.status_code == status.HTTP_200_OK
+    interview_details = response_get_interview.json()
+    assert interview_details["status"] == original_interview_status # Status should remain PENDING_QUESTIONS
+
+    response_get_questions = client.get(f"/api/v1/interviews/{interview_id}/questions")
+    assert response_get_questions.status_code == status.HTTP_200_OK
+    assert response_get_questions.json() == []
+
+@pytest.mark.asyncio
+async def test_generate_questions_stream_ai_returns_empty_questions(
+    async_app_client: httpx.AsyncClient, client: TestClient, db_session_test: Session
+):
+    """
+    Test SSE stream when generate_interview_questions AI service returns an empty list/string.
+    Expected: TASK_END event indicating no questions, and DB status update to QUESTIONS_FAILED.
+    """
+    # 1. Setup
+    job_id = create_test_job(client, title="Job For AI Empty Q Stream", desc="Valid JD")
+    candidate_id = create_test_candidate(client, email="aiemptyq.stream@example.com", resume_text="Valid resume")
+    
+    response_create_interview = client.post(
+        "/api/v1/interviews/",
+        json={"job_id": job_id, "candidate_id": candidate_id, "status": "PENDING_QUESTIONS"}
+    )
+    assert response_create_interview.status_code == status.HTTP_201_CREATED
+    interview_id = response_create_interview.json()["id"]
+
+    mock_analyzed_jd_success = "Analyzed JD for empty Q."
+    mock_parsed_resume_success = "Parsed Resume for empty Q."
+    mock_empty_questions_text = "" # AI returns empty string, meaning no questions
+
+    # 2. Mock AI services to succeed but return no questions
+    with patch("app.api.v1.endpoints.interviews.analyze_jd", AsyncMock(return_value=mock_analyzed_jd_success)) as mock_ai_analyze_jd, \
+         patch("app.api.v1.endpoints.interviews.parse_resume", AsyncMock(return_value=mock_parsed_resume_success)) as mock_ai_parse_resume, \
+         patch("app.api.v1.endpoints.interviews.generate_interview_questions", AsyncMock(return_value=mock_empty_questions_text)) as mock_ai_generate_questions:
+
+        # 3. Call SSE endpoint
+        response = await async_app_client.post(f"/api/v1/interviews/{interview_id}/generate-questions-stream")
+        
+        assert response.status_code == status.HTTP_200_OK
+        assert "text/event-stream" in response.headers["content-type"].lower()
+
+        # 4. Collect and parse SSE events
+        received_events = []
+        raw_event_chunks_for_debug = []
+        async for line in response.aiter_lines():
+            raw_event_chunks_for_debug.append(line)
+            if line.startswith("data:"):
+                event_data_str = line[len("data:") :].strip()
+                try:
+                    event_payload = json.loads(event_data_str)
+                    received_events.append(event_payload)
+                except json.JSONDecodeError:
+                    pytest.fail(f"Failed to parse SSE event JSON: {event_data_str}. Raw lines: {raw_event_chunks_for_debug}")
+        
+        assert len(received_events) > 0, f"No SSE events received. Raw chunks for debug: {raw_event_chunks_for_debug}"
+
+        # 5. Assert AG-UI Events
+        task_start_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_START), None)
+        assert task_start_event is not None, "TASK_START event not found"
+        task_id = task_start_event["payload"]["task_id"]
+        assert task_id, "Task ID missing in TASK_START event"
+
+        thought_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_THOUGHT and e.get("payload", {}).get("task_id") == task_id]
+        # Expect thoughts: Accessing, Analyzing JD, JD complete, Parsing resume, Resume complete, Generating questions
+        assert len(thought_events) >= 4, f"Expected at least 4 THOUGHT events, got {len(thought_events)}"
+
+        # No QUESTION_GENERATED events
+        question_generated_events = [e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_QUESTION_GENERATED and e.get("payload", {}).get("task_id") == task_id]
+        assert len(question_generated_events) == 0, "QUESTION_GENERATED events found when AI returned empty questions"
+
+        # TASK_END event indicating completion with no questions
+        task_end_event = next((e for e in received_events if e.get("event_type") == AG_UI_EVENT_TYPE_TASK_END and e.get("payload", {}).get("task_id") == task_id), None)
+        assert task_end_event is not None, "TASK_END event not found"
+        # In generate_question_events_stream, status is "completed_with_no_questions"
+        assert task_end_event["payload"]["status"] == "completed_with_no_questions"
+        assert task_end_event["payload"]["message"] == f"Generated 0 questions for interview {interview_id}." # Based on current stream logic
+        assert task_end_event["payload"]["final_questions"] == []
+
+        # 6. Assert AI service calls
+        mock_ai_analyze_jd.assert_awaited_once()
+        mock_ai_parse_resume.assert_awaited_once()
+        mock_ai_generate_questions.assert_awaited_once()
+
+    # 7. Assert Database state
+    # Status should be updated to QUESTIONS_FAILED as per current stream logic
+    response_get_interview = client.get(f"/api/v1/interviews/{interview_id}")
+    assert response_get_interview.status_code == status.HTTP_200_OK
+    interview_details = response_get_interview.json()
+    assert interview_details["status"] == InterviewStatus.QUESTIONS_FAILED.value
+
+    response_get_questions = client.get(f"/api/v1/interviews/{interview_id}/questions")
+    assert response_get_questions.status_code == status.HTTP_200_OK
+    assert response_get_questions.json() == [] # No questions created
+
+# Ensure models is imported if used for status comparison directly (e.g. models.InterviewStatus.QUESTIONS_GENERATED)
+# from app.db import models # Would typically be at the top of the file 

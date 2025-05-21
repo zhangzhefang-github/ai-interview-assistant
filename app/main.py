@@ -30,6 +30,8 @@ else:
 print("----------------------------------")
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.endpoints import jobs as jobs_router
 from app.api.v1.endpoints import candidates as candidates_router # Import candidates router
@@ -62,6 +64,37 @@ app = FastAPI(
     title="AI Interview Assistant API",
     lifespan=lifespan # Pass the lifespan context manager
 )
+
+# Add CORS middleware
+# IMPORTANT: This should be placed before any routers are included if you want CORS headers to apply to them.
+origins = [
+    "http://localhost",              # For local development if you use localhost
+    "http://localhost:3000",         # Common port for React dev servers
+    "http://127.0.0.1",              # For local development if you use 127.0.0.1
+    "http://127.0.0.1:3000",         # Common port for Streamlit/other Python web apps dev servers
+    "http://localhost:8501",         # Default Streamlit port if run directly
+    "http://127.0.0.1:8501",         # Default Streamlit port if run directly
+    # Add any other origins your frontend might be served from
+    # For development, you might use "*" to allow all origins, but be more restrictive in production.
+    # "*" # Allow all origins - USE WITH CAUTION IN PRODUCTION
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:8501", "http://localhost:8501"],  # MODIFIED: Explicitly specify frontend origins
+    allow_credentials=True,
+    allow_methods=["*"], # Allow all methods (GET, POST, etc.)
+    allow_headers=["*"]  # Allow all headers
+)
+
+# Mount static files directory
+# This should be AFTER the app instance is created and BEFORE any routes that might conflict.
+# The path "/static" means that files in the "static" directory will be accessible at "http://<host>:<port>/static/<filename>"
+# Ensure the 'static' directory exists at the root of your project if main.py is in 'app/'
+# and uvicorn is run from the root as 'uvicorn app.main:app'.
+# The path to the 'static' directory needs to be relative to where uvicorn is run.
+# If uvicorn is run from the project root:
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # @app.on_event("startup") # This is now handled by lifespan
 # async def startup_event():

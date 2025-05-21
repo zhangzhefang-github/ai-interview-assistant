@@ -222,35 +222,46 @@ This project evolved through several key stages and problem-solving steps, inclu
     ├── app/                      # Main application source code (FastAPI)
     │   ├── api/                  # API specific modules
     │   │   └── v1/               # Version 1 of the API
-    │   │       ├── endpoints/    # API route definitions (e.g., interviews.py, jobs.py)
-    │   │       └── schemas.py    # Pydantic schemas for request/response validation and serialization
+    │   │       ├── endpoints/    # API route definitions
+    │   │       └── schemas.py    # Pydantic schemas
     │   ├── core/                 # Core application logic, configuration, and prompts
-    │   │   ├── config.py         # Application settings (potentially from .env)
+    │   │   ├── config.py         # Application settings
     │   │   └── prompts.py        # Prompts for AI services
     │   ├── db/                   # Database interaction layer
     │   │   ├── models.py         # SQLAlchemy ORM models
-    │   │   ├── session.py        # Database session management (get_db dependency)
-    │   │   └── crud/             # CRUD operations (optional, can be in services or endpoints)
+    │   │   ├── session.py        # Database session management
+    │   │   └── crud/             # CRUD operations
     │   ├── services/             # Business logic layer, AI service integrations
-    │   │   ├── ai_services.py    # Client for interacting with LLMs for various tasks
-    │   │   └── ai_report_generator.py # Specific logic for generating AI reports
-    │   ├── utils/                # Utility functions (e.g., JSON parsers)
-    │   └── main.py               # FastAPI application entry point, middleware, router inclusion
+    │   │   ├── ai_services.py    # Client for interacting with LLMs
+    │   │   └── ai_report_generator.py # Logic for AI report generation
+    │   ├── utils/                # Utility functions
+    │   └── main.py               # FastAPI application entry point (app.main:app)
     ├── streamlit_app/            # Streamlit frontend application
     │   ├── pages/                # Individual pages of the Streamlit app
-    │   ├── utils/                # Frontend specific utilities (e.g., api_client.py)
+    │   ├── utils/                # Frontend specific utilities
     │   └── app_navigator.py      # Main Streamlit application navigator/entry point
     ├── tests/                    # Test suite (Pytest)
     │   ├── api/                  # API tests
     │   └── conftest.py           # Pytest fixtures and configuration
-    ├── .env                      # Local environment variables (GIT IGNORED)
-    ├── env.example               # Example environment file
+    ├── static/                   # Static files (e.g., CSS, JS, images)
+    ├── .conda-env                # Conda environment file (if using Conda)
+    ├── .envrc                    # direnv environment configuration file (if using direnv)
     ├── .gitignore                # Files and directories to ignore in Git
     ├── .python-version           # pyenv Python version for the project
+    ├── .test_migration_env       # Test database migration environment configuration file
     ├── alembic.ini               # Alembic configuration file
-    ├── pyproject.toml            # Project metadata and dependencies (for uv/PEP 517 tools)
-    ├── pytest.ini                # Pytest configuration
-    ├── README.md                 # This file
+    ├── ai_interview_assistant.egg-info/ # Python package build information (egg)
+    ├── build/                    # Build output directory
+    ├── env.example               # Example environment file
+    ├── LICENSE                   # Project license file
+    ├── LICENSE.md                # Project license file (Markdown)
+    ├── main.py                   # Main script in project root (purpose needs clarification based on context)
+    ├── migration_sanity_check.py # Database migration sanity check script
+    ├── pyproject.toml            # Project metadata and dependencies (PEP 517/518)
+    ├── pytest.ini                # Pytest configuration file
+    ├── README.md                 # This file (English README)
+    ├── README_zh.md              # Chinese README
+    ├── requirements.txt          # Dependencies file (often managed by uv.lock or pyproject.toml)
     └── uv.lock                   # uv lock file for reproducible dependencies
 
 ## Potential Future Enhancements

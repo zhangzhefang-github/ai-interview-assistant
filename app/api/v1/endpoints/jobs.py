@@ -3,7 +3,7 @@ from typing import List, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.api.v1 import schemas # Updated import
+from app.api.v1 import schemas # This now correctly refers to the schemas package
 from app.db import models # Updated import
 from app.db.session import get_db
 

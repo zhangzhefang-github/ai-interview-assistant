@@ -27,20 +27,44 @@ JD_ANALYSIS_PROMPT = """
 """
 
 INTERVIEW_QUESTION_GENERATION_PROMPT = """
-你是一名专业面试官，现在要面试以下候选人，请根据候选人简历与岗位需求，生成5个专业且具有挑战性的面试问题。
+你是一名专业的面试官，需要根据候选人的简历和岗位需求，生成专业且具有挑战性的面试问题。
 
-岗位需求：
-{analyzed_jd}
+**输入信息：**
 
-候选人简历：
-{structured_resume}
+*   **岗位需求分析摘要**:
+    ```
+    {analyzed_jd}
+    ```
 
-要求：
-- 问题需围绕候选人过往经历、岗位匹配度、技能实操
-- 不要提出过于宽泛的问题
-- 请确保每个问题都在一个新行上，并且不要对问题进行编号或添加任何前缀。
+*   **候选人简历结构化摘要**:
+    ```
+    {structured_resume}
+    ```
 
-请输出问题列表：
+**问题生成要求**：
+1. 生成5个专业且具有挑战性的面试问题
+2. 问题需围绕以下维度：
+   - 候选人过往经历与岗位的匹配度
+   - 核心技能的实际应用能力
+   - 项目经验中的具体贡献
+   - 技术深度与广度
+   - 解决问题的思路与方法
+3. 避免过于宽泛或简单的问题
+4. 确保问题具有针对性和可操作性
+
+**输出要求**：
+请严格按照以下JSON格式输出问题列表，不要添加任何其他描述性文字：
+```json
+{{
+  "questions": [
+    "问题1",
+    "问题2",
+    "问题3",
+    "问题4",
+    "问题5"
+  ]
+}}
+```
 """
 
 INTERVIEW_REPORT_GENERATION_PROMPT = """
@@ -113,3 +137,69 @@ COMMON_FOLLOW_UP_QUESTIONS = [
     "您是如何量化您提到的这个成果的？有哪些具体数据支撑吗？",
     "针对您提到的[某一点]，能再展开讲讲吗？"
 ] 
+
+FOLLOWUP_QUESTION_GENERATION_PROMPT = """
+你是一位资深的面试官，需要根据面试官提出的上一个问题、候选人的回答，并结合整体的岗位需求和候选人背景，生成3-4个有深度、有针对性的追问建议。
+
+**输入信息：**
+
+*   **岗位需求分析摘要 (可选，但强烈建议提供以确保相关性)**:
+    ```
+    {analyzed_jd}
+    ```
+
+*   **候选人简历结构化摘要 (可选，但强烈建议提供以确保相关性)**:
+    ```
+    {structured_resume}
+    ```
+
+*   **面试官的上一个问题**:
+    ```
+    {last_question}
+    ```
+
+*   **候选人对该问题的回答**:
+    ```
+    {candidate_answer}
+    ```
+
+**追问建议生成要求**：
+1.  生成3-4个追问问题。
+2.  追问应紧密围绕候选人回答中的关键信息、模糊点、亮点或潜在的深挖点。
+3.  追问应能进一步考察候选人的真实能力、思考深度或经验细节。
+4.  避免与已提出的问题过于重复，或提出与当前对话上下文无关的问题。
+5.  如果候选人的回答很简单或信息量不足，可以生成一些帮助其展开或提供更多细节的问题。
+6.  确保问题专业且有礼貌。
+
+**输出要求**：
+请严格按照以下JSON格式输出问题列表，不要添加任何其他描述性文字：
+```json
+{{
+  "followup_questions": [
+    "追问建议1",
+    "追问建议2",
+    "追问建议3"
+  ]
+}}
+```
+""" 
+
+# System prompts for more granular control if needed
+SYSTEM_PROMPT_FOR_JD_ANALYSIS = """
+You are an AI assistant helping to analyze job descriptions. 
+Focus on extracting key responsibilities, skills, and qualifications.
+Present the output in a structured and concise manner.
+"""
+
+SYSTEM_PROMPT_FOR_RESUME_PARSING = """
+You are an AI assistant helping to parse resumes.
+Extract information such as contact details, education, work experience, skills, and projects.
+Structure the output clearly, ideally in a JSON-like format if complex, or a well-organized text format.
+"""
+
+SYSTEM_PROMPT_FOR_QUESTION_GENERATION = """
+You are an AI assistant specialized in generating insightful interview questions.
+Given the analyzed job description and structured resume, generate relevant questions.
+Ensure questions cover various aspects like technical skills, behavioral traits, and experience.
+Output the questions in a JSON format: {"questions": ["question1", "question2", ...]}
+""" 

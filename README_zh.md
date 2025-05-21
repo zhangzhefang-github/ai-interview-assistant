@@ -1,4 +1,3 @@
-\
 [English](README.md)
 
 # AI 面试助手
@@ -216,7 +215,52 @@ AI 面试助手是一个旨在利用 AI 技术简化面试流程的平台，其�
 
 ## 项目结构
 
-    .\n    ├── alembic/                  # Alembic 迁移脚本和环境配置\n    ├── app/                      # 主应用程序源代码 (FastAPI)\n    │   ├── api/                  # API 特定模块\n    │   │   └── v1/               # API 版本 1\n    │   │       ├── endpoints/    # API 路由定义 (例如 interviews.py, jobs.py)\n    │   │       └── schemas.py    # 用于请求/响应验证和序列化的 Pydantic schema\n    │   ├── core/                 #核心应用程序逻辑、配置和提示\n    │   │   ├── config.py         # 应用程序设置 (可能来自 .env)\n    │   │   └── prompts.py        # AI 服务的提示\n    │   ├── db/                   # 数据库交互层\n    │   │   ├── models.py         # SQLAlchemy ORM 模型\n    │   │   ├── session.py        # 数据库会话管理 (get_db 依赖)\n    │   │   └── crud/             # CRUD 操作 (可选, 可位于 services 或 endpoints 中)\n    │   ├── services/             # 业务逻辑层, AI 服务集成\n    │   │   ├── ai_services.py    # 用于与 LLM 进行各种任务交互的客户端\n    │   │   └── ai_report_generator.py # 生成 AI 报告的特定逻辑\n    │   ├── utils/                # 实用功能 (例如 JSON 解析器)\n    │   └── main.py               # FastAPI 应用程序入口点, 中间件, 路由包含\n    ├── streamlit_app/            # Streamlit 前端应用程序\n    │   ├── pages/                # Streamlit 应用的各个页面\n    │   ├── utils/                # 前端特定实用程序 (例如 api_client.py)\n    │   └── app_navigator.py      # 主 Streamlit 应用程序导航器/入口点\n    ├── tests/                    # 测试套件 (Pytest)\n    │   ├── api/                  # API 测试\n    │   └── conftest.py           # Pytest fixtures 和配置\n    ├── .env                      # 本地环境变量 (GIT 忽略)\n    ├── env.example               # 示例环境文件\n    ├── .gitignore                # Git 中要忽略的文件和目录\n    ├── .python-version           # 项目的 pyenv Python 版本\n    ├── alembic.ini               # Alembic 配置文件\n    ├── pyproject.toml            # 项目元数据和依赖项 (用于 uv/PEP 517 工具)\n    ├── pytest.ini                # Pytest 配置\n    ├── README.md                 # 英文版 README\n    ├── README_zh.md              # 本文件 (中文版 README)\n    └── uv.lock                   # uv lock 文件，用于可复现的依赖
+    .
+    ├── alembic/                  # Alembic 迁移脚本和环境配置
+    ├── app/                      # 主应用程序源代码 (FastAPI)
+    │   ├── api/                  # API 特定模块
+    │   │   └── v1/               # API 版本 1
+    │   │       ├── endpoints/    # API 路由定义
+    │   │       └── schemas.py    # Pydantic schemas
+    │   ├── core/                 # 核心应用程序逻辑、配置和提示
+    │   │   ├── config.py         # 应用程序设置
+    │   │   └── prompts.py        # AI 服务的提示
+    │   ├── db/                   # 数据库交互层
+    │   │   ├── models.py         # SQLAlchemy ORM 模型
+    │   │   ├── session.py        # 数据库会话管理
+    │   │   └── crud/             # CRUD 操作
+    │   ├── services/             # 业务逻辑层, AI 服务集成
+    │   │   ├── ai_services.py    # 与 LLM 交互的客户端
+    │   │   └── ai_report_generator.py # AI 报告生成逻辑
+    │   ├── utils/                # 实用功能
+    │   └── main.py               # FastAPI 应用程序入口点 (app.main:app)
+    ├── streamlit_app/            # Streamlit 前端应用程序
+    │   ├── pages/                # Streamlit 应用的各个页面
+    │   ├── utils/                # 前端特定实用程序
+    │   └── app_navigator.py      # 主 Streamlit 应用程序导航器/入口点
+    ├── tests/                    # 测试套件 (Pytest)
+    │   ├── api/                  # API 测试
+    │   └── conftest.py           # Pytest fixtures 和配置
+    ├── static/                   # 静态文件 (例如 CSS, JS, 图像)
+    ├── .conda-env                # Conda 环境文件 (如果使用 Conda)
+    ├── .envrc                    # direnv 环境配置文件 (如果使用 direnv)
+    ├── .gitignore                # Git 忽略的文件和目录
+    ├── .python-version           # 项目的 pyenv Python 版本
+    ├── .test_migration_env       # 测试数据库迁移环境配置文件
+    ├── alembic.ini               # Alembic 配置文件
+    ├── ai_interview_assistant.egg-info/ # Python 包构建信息 (egg)
+    ├── build/                    # 构建输出目录
+    ├── env.example               # 环境变量示例文件
+    ├── LICENSE                   # 项目许可证文件
+    ├── LICENSE.md                # 项目许可证文件 (Markdown)
+    ├── main.py                   # 项目根目录下的主要脚本 (用途需根据实际情况说明)
+    ├── migration_sanity_check.py # 数据库迁移健全性检查脚本
+    ├── pyproject.toml            # 项目元数据和依赖项 (PEP 517/518)
+    ├── pytest.ini                # Pytest 配置文件
+    ├── README.md                 # 英文版 README
+    ├── README_zh.md              # 本文件 (中文版 README)
+    ├── requirements.txt          # 依赖项文件 (通常由 uv.lock 或 pyproject.toml 管理)
+    └── uv.lock                   # uv lock 文件，用于可复现的依赖
 
 ## 未来可能的增强功能
 
@@ -225,17 +269,23 @@ AI 面试助手是一个旨在利用 AI 技术简化面试流程的平台，其�
 -   **高级 AI 功能**: 微调模型、更复杂的分析、用于领域特定知识的 RAG。
 -   **用户认证与授权**: 保护应用程序的访问安全。
 -   **全面的国际化与本地化**: 支持更多语言。
+-   **CI/CD 流水线**: 自动化测试和部署。
+-   **全面的日志记录与监控**: 用于生产环境。
+-   **更稳健的错误处理**: 提供详细的面向用户的错误消息。
 
 ## 贡献
 
-欢迎各种贡献！请查看 `CONTRIBUTING.md` (如果存在) 或联系项目维护者了解更多信息。
+欢迎贡献！请遵循以下步骤：
 
-通常的流程是：
-1. Fork 本仓库。
-2. 创建你的特性分支 (`git checkout -b feature/AmazingFeature`)。
-3. 提交你的更改 (`git commit -m 'Add some AmazingFeature'`)。
-4. 推送到分支 (`git push origin feature/AmazingFeature`)。
-5. 打开一个 Pull Request。
+1.  Fork 本仓库。
+2.  创建一个新分支 (`git checkout -b feature/your-feature-name`)。
+3.  进行更改。
+4.  确保测试通过 (`pytest`)。
+5.  提交您的更改 (`git commit -m 'Add some feature'`)。
+6.  将分支推送到远程仓库 (`git push origin feature/your-feature-name`)。
+7.  创建一个 Pull Request。
+
+请确保您的代码符合项目中使用的任何 linting 和格式化标准 (例如，Ruff, Black 是不错的选择，如果尚未集成)。
 
 ## 许可证
 

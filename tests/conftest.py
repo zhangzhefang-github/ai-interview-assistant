@@ -8,6 +8,8 @@ import logging # Import logging
 import traceback # Keep for explicit traceback printing if needed by logger
 import os # Added os import
 from pathlib import Path # Added Path import
+from asgi_lifespan import LifespanManager # Ensure this import is added
+import httpx # Added httpx import for AsyncClient
 
 # Add project root to sys.path
 # conftest.py is in 'tests/' directory, so project_root is parent of parent
@@ -182,3 +184,57 @@ def client(db_session_test):
 # tables are created/dropped, or how the TestClient is initialized,
 # for example, by managing the lifespan of the TestClient more explicitly
 # if startup events need a DB. For now, this setup is standard. 
+
+# --- New Fixture for App Lifespan Management ---
+# Import the main app instance. Adjust if your app instance is located elsewhere.
+# from app.main import app as main_fastapi_app # We will get app from main_module in fixture
+
+@pytest.fixture(scope="function") # Or "session" if app startup is expensive and safe to share
+async def app_lifespan_context(db_session_test): # Depends on db_session_test to ensure DB is ready
+    """
+    Provides the FastAPI app instance within its lifespan context.
+    Ensures startup and shutdown events are run.
+    """
+    logger.info("app_lifespan_context fixture setup started.")
+    
+    # Dynamically import main_module to get the app instance
+    # This aligns with how the 'client' fixture does it, ensuring fresh state
+    main_app_module_name = "app.main"
+    if main_app_module_name in sys.modules:
+        logger.debug(f"Deleting module {main_app_module_name} from sys.modules for app_lifespan_context")
+        del sys.modules[main_app_module_name]
+    
+    logger.debug(f"Importing main app module for app_lifespan_context: {main_app_module_name}")
+    current_main_module = importlib.import_module(main_app_module_name)
+    the_app = current_main_module.app # Get the app instance
+
+    # Override DB dependency for the app instance used in this context
+    def override_get_db_for_lifespan():
+        try:
+            yield db_session_test
+        finally:
+            pass # db_session_test handles its own close
+            
+    the_app.dependency_overrides[get_db] = override_get_db_for_lifespan
+    logger.debug("Applied dependency_overrides for app_lifespan_context.")
+
+    async with LifespanManager(the_app) as manager:
+        logger.info("LifespanManager entered for app_lifespan_context.")
+        yield manager.app # Yield the app instance from the manager
+    
+    logger.info("LifespanManager exited for app_lifespan_context. Cleaning up dependency override.")
+    the_app.dependency_overrides.clear()
+
+# Fixture to provide an httpx.AsyncClient configured with the app from app_lifespan_context
+@pytest.fixture(scope="function")
+async def async_app_client(app_lifespan_context):
+    """
+    Provides an httpx.AsyncClient configured to talk to the app
+    managed by app_lifespan_context.
+    """
+    # app_lifespan_context yields the app instance itself after entering LifespanManager
+    the_managed_app = app_lifespan_context 
+    async with httpx.AsyncClient(app=the_managed_app, base_url="http://testserver") as client:
+        logger.info("httpx.AsyncClient created for async_app_client.")
+        yield client
+    logger.info("httpx.AsyncClient closed for async_app_client.") 

@@ -1,11 +1,13 @@
-from pydantic import BaseModel, EmailStr, ConfigDict
+from pydantic import BaseModel, EmailStr, ConfigDict, Field
 from typing import List, Optional
 from datetime import datetime
+from app.db.models import SpeakerRole
 
 # --- Job Schemas ---
 class JobBase(BaseModel):
     title: str
     description: str
+    analyzed_description: Optional[str] = None
 
 class JobCreate(JobBase):
     pass
@@ -13,6 +15,7 @@ class JobCreate(JobBase):
 class JobUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
+    analyzed_description: Optional[str] = None
 
 class JobRead(JobBase):
     id: int
@@ -33,6 +36,7 @@ class CandidateBase(BaseModel):
     name: str
     email: EmailStr
     resume_text: str
+    structured_resume_info: Optional[dict] = None
 
 class CandidateCreate(CandidateBase):
     pass
@@ -40,6 +44,7 @@ class CandidateCreate(CandidateBase):
 class CandidateUpdate(BaseModel):
     name: Optional[str] = None
     resume_text: Optional[str] = None
+    structured_resume_info: Optional[dict] = None
     # Email is typically not updatable directly or requires a separate process
 
 class CandidateInDBBase(CandidateBase):
@@ -69,6 +74,7 @@ class Question(QuestionInDBBase): # Schema for returning a question
 # --- Report Schemas (forward declaration for Interview) ---
 class ReportBase(BaseModel):
     generated_text: str
+    source_dialogue: Optional[str] = None
 
 class ReportCreate(ReportBase):
     pass
@@ -82,13 +88,18 @@ class Report(ReportBase):
 
 class ReportUpdate(BaseModel):
     generated_text: Optional[str] = None
+    source_dialogue: Optional[str] = None
 
 # --- InterviewLog Schemas (forward declaration for Interview) ---
 class InterviewLogBase(BaseModel):
-    order_num: Optional[int] = None
-    question_text_snapshot: Optional[str] = None
-    full_dialogue_text: str
     question_id: Optional[int] = None
+    full_dialogue_text: Optional[str] = None
+    order_num: Optional[int] = None
+    speaker_role: Optional[SpeakerRole] = Field(default=SpeakerRole.SYSTEM)
+    question_text_snapshot: Optional[str] = None
+
+    class Config:
+        from_attributes = True
 
 class InterviewLogCreate(InterviewLogBase):
     pass
@@ -97,7 +108,6 @@ class InterviewLog(InterviewLogBase):
     id: int
     interview_id: int
     created_at: datetime
-    model_config = ConfigDict(from_attributes=True)
 
 # --- Interview Schemas ---
 class InterviewBase(BaseModel):

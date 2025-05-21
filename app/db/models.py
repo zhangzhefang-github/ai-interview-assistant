@@ -11,6 +11,7 @@ class Job(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     title = Column(String(100), nullable=False)
     description = Column(Text, nullable=False)
+    analyzed_description = Column(Text, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
@@ -24,6 +25,7 @@ class Candidate(Base):
     name = Column(String(100), nullable=False)
     email = Column(String(100), unique=True, index=True, nullable=False)
     resume_text = Column(Text, nullable=False)
+    structured_resume_info = Column(JSON, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
 
@@ -37,6 +39,12 @@ class InterviewStatus(enum.Enum):
     REPORT_GENERATED = "REPORT_GENERATED"
     # Potentially: AWAITING_LOGS, INTERVIEW_IN_PROGRESS
 
+# Define SpeakerRole Enum for InterviewLog
+class SpeakerRole(enum.Enum):
+    INTERVIEWER = "INTERVIEWER" # AI Interviewer
+    CANDIDATE = "CANDIDATE"
+    SYSTEM = "SYSTEM" # For system messages, if any
+
 # 新的 InterviewLog 模型
 class InterviewLog(Base):
     __tablename__ = "interview_logs"
@@ -45,6 +53,8 @@ class InterviewLog(Base):
     interview_id = Column(Integer, ForeignKey("interviews.id"), nullable=False)
     question_id = Column(Integer, ForeignKey("questions.id", ondelete="SET NULL"), nullable=True) # Link to the specific question if applicable
     
+    speaker_role = Column(DBEnum(SpeakerRole), nullable=False) # ADDED SPEAKER_ROLE
+
     # Stores the actual text of the question at the time of logging,
     # useful if predefined questions can change or if it's an ad-hoc question.
     question_text_snapshot = Column(Text, nullable=True)
@@ -69,6 +79,7 @@ class Report(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     interview_id = Column(Integer, ForeignKey("interviews.id"), unique=True, nullable=False) # One report per interview
     generated_text = Column(Text, nullable=False)
+    source_dialogue = Column(Text, nullable=True) # ADDED: To store the dialogue used for report generation
     # llm_model_used = Column(String(100), nullable=True) # Optional: track model used
     # report_version = Column(Integer, default=1) # Optional: if reports can be re-generated and versioned
     created_at = Column(TIMESTAMP, server_default=func.now())

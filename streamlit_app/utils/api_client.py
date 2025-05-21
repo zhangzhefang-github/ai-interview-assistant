@@ -5,7 +5,7 @@ from streamlit_app.core_ui_config import BACKEND_API_URL
 from streamlit_app.utils.logger_config import get_logger
 from io import BytesIO
 from urllib.parse import urljoin # Added for robust URL joining
-from typing import Optional # Ensure Optional is imported
+from typing import Optional, Dict, List, Any # Ensure Optional, Dict, List, Any are imported
 from datetime import datetime # Ensure datetime is imported for type hint if not already
 
 # 使用 __name__ 作为 logger 的名称，符合Python的习惯
@@ -598,6 +598,28 @@ def create_interview_log_api(interview_id: int, log_data: dict) -> dict:
     except requests.exceptions.RequestException as e:
         logger.error(f"An unexpected error occurred while creating interview log for ID {interview_id}: {e}", exc_info=True)
         raise APIError(message=f"保存面试过程记录时发生意外错误: {e}")
+
+def get_interview_logs(interview_id: int) -> List[Dict[str, Any]]:
+    """
+    Fetches all log entries for a specific interview.
+    """
+    try:
+        response = requests.get(f"{BACKEND_API_URL}/interviews/{interview_id}/logs")
+        response.raise_for_status()  # Raises HTTPError for bad responses (4XX or 5XX)
+        return response.json()
+    except requests.exceptions.HTTPError as http_err:
+        logger.error(f"HTTP error fetching logs for interview {interview_id}: {http_err} - {response.text}")
+        try:
+            error_detail = response.json().get("detail", response.text)
+        except ValueError:
+            error_detail = response.text
+        raise APIError(message=f"获取面试ID {interview_id} 的日志失败", details=error_detail, status_code=response.status_code) from http_err
+    except requests.exceptions.RequestException as req_err:
+        logger.error(f"Request error fetching logs for interview {interview_id}: {req_err}")
+        raise APIError(message=f"请求面试ID {interview_id} 的日志时网络错误", details=str(req_err)) from req_err
+    except ValueError as json_err: # Includes json.JSONDecodeError
+        logger.error(f"JSON decode error for interview logs {interview_id}: {json_err}")
+        raise APIError(message="解析面试日志响应失败", details=str(json_err)) from json_err
 
 # Make sure to add new functions to __all__ if you use it for explicit exports
 # Example for __all__ if it existed at the top of the file:

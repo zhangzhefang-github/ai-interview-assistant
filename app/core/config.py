@@ -8,6 +8,11 @@ class Settings(BaseSettings):
     OPENAI_API_BASE: Optional[str] = None
     DATABASE_URL: str
 
+    # Specific settings for question generation, with defaults
+    OPENAI_MODEL_NAME_QUESTION_GENERATION: str = "gpt-4o-mini"
+    OPENAI_TEMPERATURE_QUESTION_GENERATION: float = 0.7
+    # OPENAI_MAX_TOKENS_QUESTION_GENERATION: int = 500 # Optional, can be added if needed
+
     # model_config 用于配置 Pydantic-settings 的行为
     # 在这里，我们指定从 .env 文件加载环境变量
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding='utf-8', extra='ignore')

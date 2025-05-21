@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSE Endpoint Tester</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: auto; }
+        label { display: block; margin-top: 10px; }
+        input[type="text"], input[type="number"] { width: 100%; padding: 8px; margin-bottom: 10px; box-sizing: border-box; }
+        button { padding: 10px 15px; cursor: pointer; }
+        #output { margin-top: 20px; padding: 10px; border: 1px solid #ccc; min-height: 200px; white-space: pre-wrap; background-color: #f9f9f9; }
+        .event { border-bottom: 1px dashed #eee; padding-bottom: 5px; margin-bottom: 5px; }
+        .event-meta { font-size: 0.8em; color: #555; }
+        .event-data { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>SSE Endpoint Tester</h1>
+        
+        <label for="baseUrl">Backend Base URL (e.g., http://localhost:8000):</label>
+        <input type="text" id="baseUrl" value="http://localhost:8000">
+
+        <label for="interviewId">Interview ID:</label>
+        <input type="number" id="interviewId" value="12">
+
+        <label for="logId">Log ID:</label>
+        <input type="number" id="logId" value="42">
+
+        <button id="startTestBtn">Start SSE Test</button>
+        <button id="stopTestBtn" disabled>Stop SSE Test</button>
+
+        <h2>Output:</h2>
+        <div id="output"></div>
+    </div>
+
+    <script>
+        const baseUrlInput = document.getElementById('baseUrl');
+        const interviewIdInput = document.getElementById('interviewId');
+        const logIdInput = document.getElementById('logId');
+        const startTestBtn = document.getElementById('startTestBtn');
+        const stopTestBtn = document.getElementById('stopTestBtn');
+        const outputDiv = document.getElementById('output');
+        let eventSource = null;
+        let readyStateInterval = null; // Added for periodic readyState check
+        let taskEndReceived = false; // Flag to track if task_end was received
+
+        function logWithTimestamp(level, ...args) {
+            const timestamp = new Date().toISOString();
+            if (level === "error") {
+                console.error(`[${timestamp}] [SSE Client]`, ...args);
+            } else {
+                console.log(`[${timestamp}] [SSE Client]`, ...args);
+            }
+        }
+
+        startTestBtn.addEventListener('click', () => {
+            const baseUrl = baseUrlInput.value.trim().replace(/\/$/, ''); // Remove trailing slash
+            const interviewId = interviewIdInput.value;
+            const logId = logIdInput.value;
+
+            if (!interviewId || !logId) {
+                alert("Please enter both Interview ID and Log ID.");
+                return;
+            }
+
+            taskEndReceived = false; // Reset flag for new test
+
+            // Path segment should start from /api/v1/... if your BACKEND_API_URL in Streamlit was http://localhost:8000
+            // Or, if baseUrl is already http://localhost:8000/api/v1, then pathSegment should be /interviews/...
+            // Assuming baseUrl is like http://localhost:8000 and the full path is /api/v1/interviews/...
+            const pathSegment = `/api/v1/interviews/${interviewId}/logs/${logId}/generate-followup-stream`;
+            const sseUrl = baseUrl + pathSegment;
+            
+            outputDiv.innerHTML = `Attempting to connect to: ${sseUrl}\nUsing method: GET (EventSource standard behavior)\n\n`;
+            logWithTimestamp("log", `Attempting to connect to EventSource URL: ${sseUrl}`);
+            
+            // Note: Standard EventSource API always uses GET. 
+            // For a POST SSE, a more complex implementation using fetch is needed.
+            // This basic test will first try with EventSource (GET). If your endpoint strictly requires POST,
+            // this direct EventSource will fail or be rejected by the server.
+            // Let's proceed with GET for EventSource and see the server's reaction.
+            // If POST is mandatory, we'll need to adjust.
+
+            try {
+                eventSource = new EventSource(sseUrl); // EventSource uses GET
+                outputDiv.innerHTML += "Connecting...\n";
+                logWithTimestamp("log", "EventSource object created. Connecting...");
+                startTestBtn.disabled = true;
+                stopTestBtn.disabled = false;
+
+                // Start periodic readyState check
+                if (readyStateInterval) clearInterval(readyStateInterval);
+                readyStateInterval = setInterval(() => {
+                    if (eventSource) {
+                        logWithTimestamp("log", `Periodic readyState check: ${eventSource.readyState} (0=CONNECTING, 1=OPEN, 2=CLOSED)`);
+                    } else {
+                        logWithTimestamp("log", "Periodic readyState check: eventSource is null.");
+                        clearInterval(readyStateInterval);
+                    }
+                }, 2000); // Check every 2 seconds
+
+                eventSource.onopen = () => {
+                    outputDiv.innerHTML += "SSE Connection opened.\\n";
+                    logWithTimestamp("log", "EventSource connection opened (onopen event). State:", eventSource.readyState);
+                };
+
+                eventSource.onmessage = (event) => {
+                    const eventEntry = document.createElement('div');
+                    eventEntry.classList.add('event');
+                    
+                    let message = "Received raw message (default `message` event type or no explicit event type):\\n";
+                    message += `<span class=\"event-meta\">Event Type: ${event.type || '(none)'}</span>\\n`;
+                    message += `<span class=\"event-data\">${event.data || '(empty data)'}</span>\\n`;
+                    if (event.lastEventId) {
+                        message += `<span class=\"event-meta\">Last Event ID: ${event.lastEventId}</span>\\n`;
+                    }
+                    eventEntry.innerHTML = message;
+                    outputDiv.appendChild(eventEntry);
+                    outputDiv.scrollTop = outputDiv.scrollHeight; // Auto-scroll
+                    logWithTimestamp("log", "Default 'message' event received:", event);
+                    logWithTimestamp("log", "Default Event data:", event.data ? event.data : "<empty data>");
+                    logWithTimestamp("log", "Default Event lastEventId:", event.lastEventId ? event.lastEventId : "<no lastEventId>");
+                };
+
+                // Listen for specific event types if your server sends them with "event: <type>"
+                // Add listeners for your specific AgUiEventType values
+                const agUiEventTypes = [
+                    "task_start", "thought", "question_chunk", 
+                    "question_generated", "error"
+                ];
+
+                agUiEventTypes.forEach(eventType => {
+                    eventSource.addEventListener(eventType, (event) => {
+                        const eventEntry = document.createElement('div');
+                        eventEntry.classList.add('event');
+                        let jsonData = {};
+                        try {
+                            jsonData = JSON.parse(event.data || '{}');
+                        } catch (e) {
+                            logWithTimestamp("warn", `Failed to parse JSON data for event ${event.type}:`, event.data, e);
+                            // Fallback to raw data if JSON parsing fails
+                            jsonData = event.data; 
+                        }
+                        const prettyJsonData = typeof jsonData === 'string' ? jsonData : JSON.stringify(jsonData, null, 2);
+
+                        let message = `🔔 <strong style="color: ${eventType === 'error' ? 'red' : 'blue'};">[${event.type}]</strong>\\n<code style="display: block; white-space: pre-wrap; background: #efefef; padding: 5px; border-radius: 3px;">${prettyJsonData}</code>\\n`;
+                        if (event.lastEventId) {
+                            message += `<span class=\"event-meta\">Last Event ID: ${event.lastEventId}</span>\\n`;
+                        }
+                        eventEntry.innerHTML = message;
+                        outputDiv.appendChild(eventEntry);
+                        outputDiv.scrollTop = outputDiv.scrollHeight;
+                        logWithTimestamp("log", `Custom Event ('${event.type}') received:`, event);
+                    });
+                });
+
+                // Special handler for task_end to gracefully close the stream
+                eventSource.addEventListener("task_end", (event) => {
+                    const eventEntry = document.createElement('div');
+                    eventEntry.classList.add('event');
+                    let data = {};
+                    try {
+                        data = JSON.parse(event.data || '{}');
+                    } catch (e) {
+                        logWithTimestamp("error", "Failed to parse JSON for task_end event:", event.data, e);
+                        data = { message: "Received task_end, but data parsing failed.", originalData: event.data };
+                    }
+                    
+                    eventEntry.innerHTML = `
+                        ✅ <strong style=\"color: green;\">[${event.type}] - Stream Finished</strong><br>
+                        <pre style=\"background: #e6ffe6; padding: 5px; border-radius: 3px; white-space: pre-wrap;\">${JSON.stringify(data, null, 2)}</pre>
+                        <span class=\"event-meta\">Last Event ID: ${event.lastEventId || 'N/A'}</span>
+                    `;
+                    outputDiv.appendChild(eventEntry);
+                    outputDiv.scrollTop = outputDiv.scrollHeight;
+                    logWithTimestamp("log", "'task_end' event received. Data:", data);
+                    taskEndReceived = true; // Set flag
+
+                    outputDiv.innerHTML += "\\n✅ 'task_end' event received. Preparing to close client connection shortly.\\n";
+                    // Call stopStream with a delay to allow onerror to potentially be ignored if it fires due to server closing connection right after task_end
+                    setTimeout(() => {
+                        // Check taskEndReceived again in case stopStream was already called by a more definitive error
+                        if (taskEndReceived) { // Ensure it was this path that intended to close
+                           logWithTimestamp("log", "Gracefully closing connection after task_end processing delay.");
+                           stopStream(true); // Pass true to indicate normal closure after task_end
+                        }
+                    }, 100); 
+                });
+
+                eventSource.onerror = (errorEvent) => {
+                    if (taskEndReceived) {
+                        logWithTimestamp("info", "⚠️ SSE 'onerror' event captured AFTER 'task_end' was received. This is likely a benign event due to server connection close. No action taken.");
+                        // Optionally, update UI to confirm closure is expected
+                        // outputDiv.innerHTML += "\\nℹ️ Connection closed by server (expected after task_end).\\n";
+                        // Do NOT call stopStream() here, as it's handled by task_end or if state is definitively CLOSED
+                        // However, if the state IS closed, we might want to ensure UI reflects that and buttons are reset.
+                        if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+                            logWithTimestamp("info", "SSE Connection is definitively CLOSED after task_end. Ensuring UI is updated.");
+                            stopStream(true); // Ensure cleanup if not already done, mark as normal
+                        }
+                        return; 
+                    }
+
+                    logWithTimestamp("error", "❌ SSE 'onerror' event captured BEFORE 'task_end':", errorEvent);
+                    
+                    // Check if eventSource still exists and its readyState
+                    if (eventSource && eventSource.readyState === EventSource.CLOSED) {
+                        outputDiv.innerHTML += "\\n❌ Connection definitively closed by server or due to a fatal error (before task_end). No further data will arrive.\\n";
+                        logWithTimestamp("error", "SSE Connection CLOSED (before task_end). Stopping stream.");
+                        stopStream(false); // Call stopStream indicating an error closure
+                    } else {
+                        // For CONNECTING or OPEN states during an error, or if eventSource is null
+                        outputDiv.innerHTML += "\\n⚠️ A SSE error/warning occurred (before task_end, possibly recoverable or a reconnection attempt). Check console. Current state: " + (eventSource ? eventSource.readyState : 'N/A') + "\\n";
+                        logWithTimestamp("warn", "SSE recoverable error/warning (before task_end). State: ", eventSource ? eventSource.readyState : 'N/A');
+                        // Do NOT call stopStream() here, allow browser to retry or for the connection to persist if the error was transient.
+                        // However, if it's an error and not just a retry attempt, the user might want to stop.
+                        // For now, we let browser retry, unless state becomes CLOSED.
+                    }
+                };
+
+            } catch (e) {
+                outputDiv.innerHTML += `Error initializing EventSource: ${e.message}\n`;
+                logWithTimestamp("error", "Error initializing EventSource: ", e);
+                stopStream();
+            }
+        });
+
+        stopTestBtn.addEventListener('click', () => {
+            stopStream();
+        });
+
+        function stopStream(normalClosureAfterTaskEnd = false) { // Added parameter
+            if (readyStateInterval) clearInterval(readyStateInterval); // Stop periodic check
+            
+            if (eventSource) {
+                const lastKnownState = eventSource.readyState;
+                eventSource.close();
+                logWithTimestamp("log", `SSE Connection explicitly closed by client (stopStream function called). Initial state before close: ${lastKnownState}, Current state: ${eventSource.readyState}`);
+                
+                if (normalClosureAfterTaskEnd) {
+                    if (!outputDiv.innerHTML.includes("Task completed. SSE closed after task_end.")) { // Avoid duplicate messages
+                        outputDiv.innerHTML += "\\n✅ Task completed. SSE closed after task_end.\\n";
+                    }
+                } else if (!taskEndReceived) { // Only show error if task_end was NOT received
+                    if (!outputDiv.innerHTML.includes("SSE Error. task_end not received.")) { // Avoid duplicate messages
+                         outputDiv.innerHTML += "\\n❌ SSE Error or connection closed by client before task_end was received.\\n";
+                    }
+                } else {
+                     // If taskEndReceived is true, but normalClosureAfterTaskEnd is false, it means stopStream was called
+                     // by something other than the task_end handler's timeout (e.g. user pressed stop, or an aggressive onerror path not fully caught)
+                     // but after task_end was seen. We can consider this a manual stop or an edge case.
+                     logWithTimestamp("info", "stopStream called after task_end, but not via normal task_end handler's timeout. Likely manual stop or other edge case.");
+                     if (!outputDiv.innerHTML.includes("SSE Connection closed by client.")) {
+                         outputDiv.innerHTML += "SSE Connection closed by client.\\n";
+                     }
+                }
+            } else {
+                logWithTimestamp("log", "stopStream called but eventSource was already null.");
+                 if (!taskEndReceived && !outputDiv.innerHTML.includes("SSE Error. task_end not received.")) {
+                    outputDiv.innerHTML += "\\nℹ️ SSE stream stop requested, but no active connection or task_end not received.\\n";
+                 } else if (taskEndReceived && !outputDiv.innerHTML.includes("Task completed.")) {
+                     outputDiv.innerHTML += "\\nℹ️ SSE stream stop requested after task_end.\\n";
+                 }
+            }
+            startTestBtn.disabled = false;
+            stopTestBtn.disabled = true;
+            // taskEndReceived should ideally be reset when starting a new stream.
+            // eventSource = null; // Already done by EventSource.close() implicitly setting readyState to 2 and eventually becoming null or unusable for new events.
+            // It's safer to nullify it to prevent re-entry or checks on a closed source.
+            eventSource = null; 
+        }
+
+    </script>
+</body>
+</html> 

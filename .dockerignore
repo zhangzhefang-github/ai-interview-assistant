@@ -1,0 +1,85 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.cache
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Build artifacts
+# build/ # Keep root build/ dir content from being sent to daemon if not needed by any Dockerfile
+# dist/  # Keep root dist/ dir content from being sent to daemon if not needed by any Dockerfile
+
+*.egg
+
+# OS-specific
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE / Editor
+.idea/
+.vscode/
+
+# Secrets / Local configs
+# docker-compose uses the root .env file to substitute variables in the compose file.
+# It should not be ignored by Docker CLI if docker-compose needs to process it before passing to engine.
+# However, we definitely don't want .env files copied INTO images.
+# This .dockerignore affects the build context sent to the Docker daemon.
+# If .env is needed by 'docker-compose build' to resolve ARG in Dockerfile, don't list it.
+# But it's better to pass secrets via 'environment' in docker-compose.yaml.
+# So, we can ignore .env variants to prevent them from entering build context.
+*.env
+*.env.*
+!.env.example
+.envrc
+
+# Logs and local databases
+*.log
+*.db
+*.sqlite3
+
+# Test reports
+htmlcov/
+coverage.xml
+
+# Docker specific files
+# docker-compose.override.yml # Often for local overrides, not for image building
+
+# Other potentially unneeded top-level files/dirs for image context
+# test_sse_client.py
+# migration_sanity_check.py
+# main.py # The root one
+# tests/
+# static/ # If not copied by any Dockerfile explicitly
+# ai_interview_assistant.egg-info/ # Build artifact
+# .test_migration_env
+# .conda-env
+# pytest.ini
+# README.md
+# README_zh.md
+# LICENSE
+# LICENSE.md
+# alembic.ini # Will be copied explicitly if needed
+# alembic/ # Will be copied explicitly if needed
+# streamlit_app/ # Will be copied by frontend Dockerfile if context is subdir, or from root
+# app/ # Will be copied by backend Dockerfile if context is subdir, or from root
+# pyproject.toml # Needed for build
+# uv.lock # Needed for build
+# requirements.txt # If generated and not used 
