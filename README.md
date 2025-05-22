@@ -17,8 +17,10 @@ AI Interview Assistant is a platform designed to help streamline the interview p
 - [Installation](#installation)
 - [Environment Setup](#environment-setup)
 - [Running the Application](#running-the-application)
-  - [FastAPI Backend](#fastapi-backend)
-  - [Streamlit Frontend](#streamlit-frontend)
+  - [Using Docker Compose (Recommended)](#using-docker-compose-recommended)
+  - [Local Development (Without Docker)](#local-development-without-docker)
+    - [FastAPI Backend](#fastapi-backend)
+    - [Streamlit Frontend](#streamlit-frontend)
 - [Running Tests](#running-tests)
 - [Database Migrations](#database-migrations)
 - [Key Development Highlights & Workflow](#key-development-highlights--workflow)
@@ -112,10 +114,56 @@ This project uses a `.env` file for environment variables.
     - Ensure the databases specified (e.g., `dbname`, `testdb`) exist and the users have the necessary permissions.
     - The backend application (`app/main.py`) uses `python-dotenv` to load these variables.
     - Pytest uses `pytest-dotenv` to load these variables during tests, especially `TEST_MYSQL_DATABASE_URL`.
+    - When using Docker Compose, these variables are primarily managed through the `docker-compose.yaml` file's `environment` or `env_file` sections for each service.
 
 ## Running the Application
 
-### FastAPI Backend
+### Using Docker Compose (Recommended)
+
+This is the recommended way to run the application as it sets up all services (backend, frontend, database) in isolated containers.
+
+1.  **Ensure Docker and Docker Compose are installed.**
+2.  **Build and start the services:**
+    From the project root directory:
+    ```bash
+    docker compose up --build
+    ```
+    - To run in detached mode (in the background):
+      ```bash
+      docker compose up --build -d
+      ```
+3.  **Accessing the services:**
+    -   **FastAPI Backend**: `http://localhost:8000`
+        -   Swagger UI: `http://localhost:8000/docs`
+        -   ReDoc: `http://localhost:8000/redoc`
+    -   **Streamlit Frontend**: `http://localhost:8501`
+    -   **MySQL Database**: Accessible on `localhost:33066` (as per default `docker-compose.yaml`) by database tools or other services.
+
+4.  **Database Migrations (Alembic):**
+    When the application starts for the first time, or if there are new database schema changes, migrations need to be applied. The `backend` service in `docker-compose.yaml` is configured with a command that attempts to run migrations on startup.
+    If you need to run migrations manually while the services are running:
+    ```bash
+    docker compose exec backend alembic upgrade head
+    ```
+    To generate a new migration (usually done in a local development environment first):
+    ```bash
+    docker compose exec backend alembic revision --autogenerate -m "Your migration message"
+    ```
+    Then, after reviewing the script, apply it.
+
+5.  **Viewing logs:**
+    ```bash
+    docker compose logs -f <service_name> # e.g., backend, frontend, db
+    ```
+
+6.  **Stopping the services:**
+    ```bash
+    docker compose down
+    ```
+
+### Local Development (Without Docker)
+
+#### FastAPI Backend
 
 1.  **Ensure your virtual environment (if explicitly managed) is active and `.env` is populated.**
 2.  **Run database migrations (if this is the first time or if there are new migrations):**
@@ -218,76 +266,58 @@ This project evolved through several key stages and problem-solving steps, inclu
 ## Project Structure
 
     .
+    ├── .dockerignore             # Specifies intentionally untracked files that Docker should ignore
+    ├── .git/                     # Git version control metadata
+    ├── .gitignore                # Specifies intentionally untracked files that Git should ignore
+    ├── .pytest_cache/            # Cache directory for pytest
+    ├── .venv/                    # Python virtual environment (if used locally)
     ├── alembic/                  # Alembic migration scripts and environment configuration
-    ├── app/                      # Main application source code (FastAPI)
+    ├── app/                      # Main application source code (FastAPI backend)
     │   ├── api/                  # API specific modules
     │   │   └── v1/               # Version 1 of the API
-    │   │       ├── endpoints/    # API route definitions
-    │   │       └── schemas.py    # Pydantic schemas
+    │   │       ├── endpoints/    # API route definitions (FastAPI routers)
+    │   │       └── schemas.py    # Pydantic schemas for request/response validation and serialization
     │   ├── core/                 # Core application logic, configuration, and prompts
-    │   │   ├── config.py         # Application settings
-    │   │   └── prompts.py        # Prompts for AI services
+    │   │   ├── config.py         # Application settings (e.g., loading from environment variables)
+    │   │   └── prompts.py        # Prompts for AI services (e.g., for Langchain)
     │   ├── db/                   # Database interaction layer
-    │   │   ├── models.py         # SQLAlchemy ORM models
-    │   │   ├── session.py        # Database session management
-    │   │   └── crud/             # CRUD operations
+    │   │   ├── models.py         # SQLAlchemy ORM models defining database tables
+    │   │   ├── session.py        # Database session management (SQLAlchemy SessionLocal)
+    │   │   └── crud/             # CRUD (Create, Read, Update, Delete) operations for models
     │   ├── services/             # Business logic layer, AI service integrations
-    │   │   ├── ai_services.py    # Client for interacting with LLMs
+    │   │   ├── ai_services.py    # Client for interacting with LLMs (e.g., OpenAI via Langchain)
     │   │   └── ai_report_generator.py # Logic for AI report generation
-    │   ├── utils/                # Utility functions
-    │   └── main.py               # FastAPI application entry point (app.main:app)
+    │   ├── utils/                # Utility functions for the backend
+    │   └── main.py               # FastAPI application entry point (creates FastAPI app instance, mounts routers)
     ├── streamlit_app/            # Streamlit frontend application
     │   ├── pages/                # Individual pages of the Streamlit app
-    │   ├── utils/                # Frontend specific utilities
+    │   ├── utils/                # Frontend specific utilities (e.g., API client)
+    │   ├── assets/               # Static assets for the frontend (e.g., images, CSS - if any)
     │   └── app_navigator.py      # Main Streamlit application navigator/entry point
+    ├── static/                   # Static files (currently minimal, e.g., test_sse_client.html - may be deprecated or for backend specific static files if any)
+    ├── streamlit_tmp/            # Temporary directory, possibly for Streamlit uploads (ensure .gitignore)
     ├── tests/                    # Test suite (Pytest)
-    │   ├── api/                  # API tests
-    │   └── conftest.py           # Pytest fixtures and configuration
-    ├── static/                   # Static files (e.g., CSS, JS, images)
+    │   ├── api/                  # API tests (testing FastAPI endpoints)
+    │   ├── conftest.py           # Pytest fixtures and global test configurations
+    │   └── ...                   # Other test modules (e.g., unit tests for services)
     ├── .conda-env                # Conda environment file (if using Conda)
     ├── .envrc                    # direnv environment configuration file (if using direnv)
-    ├── .gitignore                # Files and directories to ignore in Git
     ├── .python-version           # pyenv Python version for the project
-    ├── .test_migration_env       # Test database migration environment configuration file
     ├── alembic.ini               # Alembic configuration file
-    ├── ai_interview_assistant.egg-info/ # Python package build information (egg)
-    ├── build/                    # Build output directory
-    ├── env.example               # Example environment file
-    ├── LICENSE                   # Project license file
-    ├── LICENSE.md                # Project license file (Markdown)
-    ├── main.py                   # Main script in project root (purpose needs clarification based on context)
-    ├── migration_sanity_check.py # Database migration sanity check script
-    ├── pyproject.toml            # Project metadata and dependencies (PEP 517/518)
+    ├── docker-compose.yaml       # Docker Compose configuration for running multi-container application
+    ├── Dockerfile                # Dockerfile for the backend service (referenced in docker-compose.yaml)
+    ├── env.example               # Example environment variables file
+    ├── init.sql                  # Initial SQL script for database setup (e.g. for MySQL)
+    ├── LICENSE.md / LICENSE      # Project license file(s)
+    ├── main.py                   # Minimal top-level main.py (if any, role to be clarified or removed if app.main:app is sole entry)
+    ├── migration_sanity_check.py # Script for checking migrations (developer tool)
     ├── pytest.ini                # Pytest configuration file
+    ├── pyproject.toml            # Project metadata and dependencies (for Poetry/PEP 517 builds, used by uv)
     ├── README.md                 # This file (English README)
     ├── README_zh.md              # Chinese README
-    ├── requirements.txt          # Dependencies file (often managed by uv.lock or pyproject.toml)
-    └── uv.lock                   # uv lock file for reproducible dependencies
+    ├── requirements.txt          # Requirements file (potentially for specific contexts or generated by pip freeze)
+    └── uv.lock                   # Lock file for uv, ensuring reproducible builds
 
 ## Potential Future Enhancements
 
--   **Centralize `STATUS_DISPLAY_MAPPING`**: Move to a shared utility module to avoid repetition.
--   **Real-time Collaboration/Updates**: For features like live interview logging if multiple users are involved.
--   **Advanced AI Capabilities**: Fine-tuning models, more sophisticated analysis, RAG for domain-specific knowledge.
--   **User Authentication & Authorization**: Secure access to the application.
--   **CI/CD Pipeline**: Automate testing and deployment.
--   **Comprehensive Logging & Monitoring**: For production environments.
--   **More Robust Error Handling**: Detailed user-facing error messages.
-
-## Contributing
-
-Contributions are welcome! Please follow these steps:
-
-1.  Fork the repository.
-2.  Create a new branch (`git checkout -b feature/your-feature-name`).
-3.  Make your changes.
-4.  Ensure tests pass (`pytest`).
-5.  Commit your changes (`git commit -m 'Add some feature'`).
-6.  Push to the branch (`git push origin feature/your-feature-name`).
-7.  Open a Pull Request.
-
-Please ensure your code adheres to any linting and formatting standards used in the project (e.g., Ruff, Black are good choices if not already integrated).
-
-## License
-
-This project is licensed under the MIT License. (You should create a `LICENSE.md` file containing the full MIT license text).
+-   **Centralize `

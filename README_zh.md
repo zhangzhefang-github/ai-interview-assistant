@@ -15,8 +15,10 @@ AI 面试助手是一个旨在利用 AI 技术简化面试流程的平台，其�
 - [安装](#安装)
 - [环境配置](#环境配置)
 - [运行应用程序](#运行应用程序)
-  - [FastAPI 后端](#fastapi-后端)
-  - [Streamlit 前端](#streamlit-前端)
+  - [使用 Docker Compose (推荐)](#使用-docker-compose-推荐)
+  - [本地开发 (不使用 Docker)](#本地开发-不使用-docker)
+    - [FastAPI 后端](#fastapi-后端)
+    - [Streamlit 前端](#streamlit-前端)
 - [运行测试](#运行测试)
 - [数据库迁移](#数据库迁移)
 - [关键开发亮点与工作流](#关键开发亮点与工作流)
@@ -110,10 +112,56 @@ AI 面试助手是一个旨在利用 AI 技术简化面试流程的平台，其�
     - 确保指定的数据库 (例如, `dbname`, `testdb`) 已存在，并且用户具有必要的权限。
     - 后端应用程序 (`app/main.py`) 使用 `python-dotenv` 加载这些变量。
     - Pytest 使用 `pytest-dotenv` 在测试期间加载这些变量，特别是 `TEST_MYSQL_DATABASE_URL`。
+    - 当使用 Docker Compose 时，这些变量主要通过 `docker-compose.yaml` 文件中各服务的 `environment` 或 `env_file` 部分进行管理。
 
 ## 运行应用程序
 
-### FastAPI 后端
+### 使用 Docker Compose (推荐)
+
+这是运行本应用程序的推荐方式，因为它会在隔离的容器中设置所有服务（后端、前端、数据库）。
+
+1.  **确保已安装 Docker 和 Docker Compose。**
+2.  **构建并启动服务：**
+    在项目根目录下执行：
+    ```bash
+    docker compose up --build
+    ```
+    - 若要在后台以分离模式运行：
+      ```bash
+      docker compose up --build -d
+      ```
+3.  **访问服务：**
+    -   **FastAPI 后端**: `http://localhost:8000`
+        -   Swagger UI: `http://localhost:8000/docs`
+        -   ReDoc: `http://localhost:8000/redoc`
+    -   **Streamlit 前端**: `http://localhost:8501`
+    -   **MySQL 数据库**: 可通过数据库工具或其他服务在 `localhost:33066` (根据默认的 `docker-compose.yaml` 配置) 访问。
+
+4.  **数据库迁移 (Alembic)：**
+    当应用程序首次启动，或有新的数据库模式更改时，需要应用迁移。`docker-compose.yaml` 中的 `backend` 服务配置了一个命令，在启动时尝试运行迁移。
+    如果在服务运行时需要手动运行迁移：
+    ```bash
+    docker compose exec backend alembic upgrade head
+    ```
+    要生成新的迁移（通常首先在本地开发环境中完成）：
+    ```bash
+    docker compose exec backend alembic revision --autogenerate -m "你的迁移描述信息"
+    ```
+    然后，在审查脚本后应用它。
+
+5.  **查看日志：**
+    ```bash
+    docker compose logs -f <服务名称> # 例如：backend, frontend, db
+    ```
+
+6.  **停止服务：**
+    ```bash
+    docker compose down
+    ```
+
+### 本地开发 (不使用 Docker)
+
+#### FastAPI 后端
 
 1.  **确保你的虚拟环境（如果明确管理）已激活，并且 `.env` 文件已填充。**
 2.  **运行数据库迁移 (如果是首次运行或有新的迁移):**
@@ -218,56 +266,55 @@ AI 面试助手是一个旨在利用 AI 技术简化面试流程的平台，其�
     .
     ├── .dockerignore             # Docker 构建时忽略的文件和目录
     ├── .git/                     # Git 版本控制元数据
-    ├── .github/                  # GitHub Actions 工作流等 (如果存在)
     ├── .gitignore                # Git 忽略的文件和目录
     ├── .pytest_cache/            # Pytest 缓存目录
     ├── .venv/                    # Python 虚拟环境 (如果使用)
     ├── alembic/                  # Alembic 迁移脚本和环境配置
-    ├── alembic.ini               # Alembic 配置文件
-    ├── app/                      # 主应用程序源代码 (FastAPI)
+    ├── app/                      # 主应用程序源代码 (FastAPI 后端)
     │   ├── api/                  # API 特定模块
     │   │   └── v1/               # API 版本 1
-    │   │       ├── endpoints/    # API 路由定义
-    │   │       └── schemas.py    # Pydantic schemas
+    │   │       ├── endpoints/    # API 路由定义 (FastAPI 路由器)
+    │   │       └── schemas.py    # Pydantic schemas 用于请求/响应校验和序列化
     │   ├── core/                 # 核心应用程序逻辑、配置和提示
-    │   │   ├── config.py         # 应用程序设置
-    │   │   └── prompts.py        # AI 服务的提示
+    │   │   ├── config.py         # 应用程序设置 (例如，从环境变量加载)
+    │   │   └── prompts.py        # AI 服务的提示 (例如，用于 Langchain)
     │   ├── db/                   # 数据库交互层
-    │   │   ├── models.py         # SQLAlchemy ORM 模型
-    │   │   ├── session.py        # 数据库会话管理
-    │   │   └── crud/             # CRUD 操作
+    │   │   ├── models.py         # SQLAlchemy ORM 模型定义数据库表
+    │   │   ├── session.py        # 数据库会话管理 (SQLAlchemy SessionLocal)
+    │   │   └── crud/             # CRUD (创建, 读取, 更新, 删除) 操作
     │   ├── services/             # 业务逻辑层, AI 服务集成
-    │   │   ├── ai_services.py    # 与 LLM 交互的客户端
+    │   │   ├── ai_services.py    # 与 LLM 交互的客户端 (例如，通过 Langchain 调用 OpenAI)
     │   │   └── ai_report_generator.py # AI 报告生成逻辑
-    │   ├── utils/                # 实用功能
-    │   └── main.py               # FastAPI 应用程序入口点 (app.main:app)
-    ├── ai_interview_assistant.egg-info/ # Python 包构建信息 (egg)
-    ├── build/                    # 构建输出目录
-    ├── docker-compose.yaml       # Docker Compose 配置文件
-    ├── .conda-env                # Conda 环境文件 (如果使用 Conda)
-    ├── .envrc                    # direnv 环境配置文件 (如果使用 direnv)
-    ├── env.example               # 环境变量示例文件
-    ├── LICENSE                   # 项目许可证文件
-    ├── LICENSE.md                # 项目许可证文件 (Markdown)
-    ├── main.py                   # 项目根目录下的主要脚本 (用途需根据实际情况说明)
-    ├── migration_sanity_check.py # 数据库迁移健全性检查脚本
-    ├── pyproject.toml            # 项目元数据和依赖项 (PEP 517/518)
-    ├── pytest.ini                # Pytest 配置文件
-    ├── README.md                 # 英文版 README
-    ├── README_zh.md              # 本文件 (中文版 README)
-    ├── requirements.txt          # 依赖项文件 (通常由 uv.lock 或 pyproject.toml 管理)
-    ├── static/                   # 静态文件 (例如 CSS, JS, 图像)
+    │   ├── utils/                # 后端工具函数
+    │   └── main.py               # FastAPI 应用程序入口点 (创建 FastAPI 应用实例, 挂载路由)
     ├── streamlit_app/            # Streamlit 前端应用程序
     │   ├── pages/                # Streamlit 应用的各个页面
-    │   ├── utils/                # 前端特定实用程序
-    │   └── app_navigator.py      # 主 Streamlit 应用程序导航器/入口点
+    │   ├── utils/                # 前端特定工具 (例如，API 客户端)
+    │   ├── assets/               # 前端静态资源 (例如，图片, CSS - 如果有)
+    │   └── app_navigator.py      # Streamlit 应用主导航/入口点
+    ├── static/                   # 静态文件 (目前较少, 例如 test_sse_client.html - 可能已弃用或用于后端特定的静态文件)
+    ├── streamlit_tmp/            # 临时目录，可能用于 Streamlit 文件上传 (确保在 .gitignore 中)
     ├── tests/                    # 测试套件 (Pytest)
-    │   ├── api/                  # API 测试
-    │   └── conftest.py           # Pytest fixtures 和配置
-    ├── .test_migration_env       # 测试数据库迁移环境配置文件
-    ├── test_sse_client.py        # SSE (Server-Sent Events) 测试客户端脚本
-    ├── .python-version           # 项目的 pyenv Python 版本
-    └── uv.lock                   # uv lock 文件，用于可复现的依赖
+    │   ├── api/                  # API 测试 (测试 FastAPI 端点)
+    │   ├── conftest.py           # Pytest fixtures 和全局测试配置
+    │   └── ...                   # 其他测试模块 (例如，服务的单元测试)
+    ├── .conda-env                # Conda 环境文件 (如果使用 Conda)
+    ├── .envrc                    # direnv 环境配置文件 (如果使用 direnv)
+    ├── .python-version           # 项目的 pyenv Python 版本定义文件
+    ├── alembic.ini               # Alembic 配置文件
+    ├── docker-compose.yaml       # Docker Compose 配置文件，用于运行多容器应用
+    ├── Dockerfile                # 后端服务的 Dockerfile (在 docker-compose.yaml 中引用)
+    ├── env.example               # 环境变量示例文件
+    ├── init.sql                  # 数据库初始化 SQL 脚本 (例如，用于 MySQL)
+    ├── LICENSE.md / LICENSE      # 项目许可证文件
+    ├── main.py                   # 顶层 main.py (如果存在, 其角色需澄清或如果 app.main:app 是唯一入口则移除)
+    ├── migration_sanity_check.py # 用于检查迁移的脚本 (开发者工具)
+    ├── pytest.ini                # Pytest 配置文件
+    ├── pyproject.toml            # 项目元数据和依赖 (用于 Poetry/PEP 517 构建, uv 使用)
+    ├── README.md                 # 英文 README
+    ├── README_zh.md              # 本文件 (中文 README)
+    ├── requirements.txt          # 需求文件 (可能用于特定上下文或由 pip freeze 生成)
+    └── uv.lock                   # uv 的锁文件，确保可复现构建
 
 ## 未来可能的增强功能
 
