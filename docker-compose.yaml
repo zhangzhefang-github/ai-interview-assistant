@@ -1,15 +1,13 @@
-
-version: "3.9"
-
 services:
   mysql:
-    image: mysql:8
+    image: mysql:8.0
+    command: --default-authentication-plugin=mysql_native_password
     container_name: mysql
     environment:
-      MYSQL_ROOT_PASSWORD: rootpass
-      MYSQL_DATABASE: interview_db
-      MYSQL_USER: interview_user
-      MYSQL_PASSWORD: interview_pass
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: testdb_new
+      MYSQL_USER: testuser
+      MYSQL_PASSWORD: testpassword
     volumes:
       - mysql_data:/var/lib/mysql
     ports:
@@ -21,9 +19,15 @@ services:
       dockerfile: app/Dockerfile
     container_name: backend
     environment:
-      - DATABASE_URL=mysql+pymysql://interview_user:interview_pass@mysql:3306/interview_db
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_NAME: testdb_new
+      DB_USER: testuser
+      DB_PASSWORD: testpassword
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_API_BASE: ${OPENAI_API_BASE:-https://api.openai.com/v1}
+      DATABASE_URL: mysql+pymysql://testuser:testpassword@mysql:3306/testdb_new
+      PYTHONPATH: /app
     depends_on:
       - mysql
     ports:
@@ -34,13 +38,13 @@ services:
       context: .
       dockerfile: streamlit_app/Dockerfile
     container_name: frontend
-    environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - BACKEND_URL=http://backend:8000
-    depends_on:
-      - backend
     ports:
       - "8501:8501"
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      - BACKEND_URL=http://backend:8000
 
 volumes:
   mysql_data:

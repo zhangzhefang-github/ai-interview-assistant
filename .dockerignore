@@ -67,7 +67,6 @@ coverage.xml
 # migration_sanity_check.py
 # main.py # The root one
 # tests/
-# static/ # If not copied by any Dockerfile explicitly
 # ai_interview_assistant.egg-info/ # Build artifact
 # .test_migration_env
 # .conda-env

@@ -12,7 +12,6 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.db.models import Base
-import app.db.models
 
 # --- BEGIN: Dynamically load DATABASE_URL from .env ---
 from dotenv import load_dotenv
@@ -49,6 +48,42 @@ target_metadata = Base.metadata
 # my_important_option = config.get_main_option("my_important_option")
 # ... etc.
 
+# Function to construct the database URL from environment variables
+def get_sqlalchemy_url():
+    DB_USER = os.getenv("DB_USER")
+    DB_PASSWORD = os.getenv("DB_PASSWORD")
+    DB_HOST = os.getenv("DB_HOST", "mysql") # Default to 'mysql'
+    DB_PORT = os.getenv("DB_PORT", "3306")
+    DB_NAME = os.getenv("DB_NAME")
+    
+    if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME]):
+        print("Warning: One or more database environment variables are not set.")
+        return None
+
+    return f"mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
+# Set the sqlalchemy.url dynamically using the get_sqlalchemy_url function
+db_url = get_sqlalchemy_url()
+if db_url:
+    config.set_main_option("sqlalchemy.url", db_url)
+else:
+    print("Error: Database URL could not be constructed from environment variables.")
+
+# Interpret the config file for Python logging.
+# This line sets up loggers basically.
+if config.config_file_name is not None:
+    fileConfig(config.config_file_name)
+
+# add your model's MetaData object here
+# for 'autogenerate' support
+# from myapp import mymodel
+# target_metadata = mymodel.Base.metadata
+target_metadata = Base.metadata
+
+# other values from the config, defined by the needs of env.py,
+# can be acquired:
+# my_important_option = config.get_main_option("my_important_option")
+# ... etc.
 
 def run_migrations_offline():
     """Run migrations in 'offline' mode.
@@ -81,13 +116,17 @@ def run_migrations_online():
     and associate a connection with the context.
 
     """
+    print("--- alembic/env.py: run_migrations_online() called ---") # DEBUG
+    
     connectable = engine_from_config(
         config.get_section(config.config_ini_section),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
 
+    print("--- alembic/env.py: Attempting to connect to the database... ---") # DEBUG
     with connectable.connect() as connection:
+        print("--- alembic/env.py: Successfully connected to the database. ---") # DEBUG
         context.configure(
             connection=connection, target_metadata=target_metadata
         )

@@ -8,6 +8,7 @@ dependencies = [
     "fastapi>=0.100.0",
     "uvicorn[standard]>=0.20.0",
     "sqlalchemy>=2.0.0",
+    "alembic>=1.8.0",
     "python-dotenv>=1.0.0",
     "pydantic-settings>=2.0.0",
     "pydantic[email]>=2.0,<3.0",
@@ -18,10 +19,13 @@ dependencies = [
     "langchain-openai>=0.2.0,<0.3.0",
     "tiktoken>=0.4.0",
     "anyio>=3.4.0,<4.0.0",
-    "pymysql>=1.0.0",
     "python-multipart>=0.0.5",
     "python-docx>=1.1.0",
     "pymupdf>=1.23.0",
+    "aiomysql>=0.2.0",
+    "sse-starlette>=1.0.0",
+    "sseclient-py>=1.7.2",
+    "plotly>=5.0.0",
 ]
 
 [tool.setuptools.packages.find]

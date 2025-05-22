@@ -1,8 +1,8 @@
-"""sync_models_with_stamped_head
+"""create_initial_tables
 
-Revision ID: 3ee062c1afd0
-Revises: 1bfba25a1af9
-Create Date: 2025-05-16 17:13:34.039140
+Revision ID: 147142e552b6
+Revises: 
+Create Date: 2025-05-22 07:19:53.172226
 
 """
 from alembic import op
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision = '3ee062c1afd0'
-down_revision = '1bfba25a1af9'
+revision = '147142e552b6'
+down_revision = None
 branch_labels = None
 depends_on = None
 
@@ -23,6 +23,7 @@ def upgrade():
     sa.Column('name', sa.String(length=100), nullable=False),
     sa.Column('email', sa.String(length=100), nullable=False),
     sa.Column('resume_text', sa.Text(), nullable=False),
+    sa.Column('structured_resume_info', sa.JSON(), nullable=True),
     sa.Column('created_at', sa.TIMESTAMP(), server_default=sa.text('now()'), nullable=True),
     sa.Column('updated_at', sa.TIMESTAMP(), server_default=sa.text('now()'), nullable=True),
     sa.PrimaryKeyConstraint('id')
@@ -33,6 +34,7 @@ def upgrade():
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('title', sa.String(length=100), nullable=False),
     sa.Column('description', sa.Text(), nullable=False),
+    sa.Column('analyzed_description', sa.Text(), nullable=True),
     sa.Column('created_at', sa.TIMESTAMP(), server_default=sa.text('now()'), nullable=True),
     sa.Column('updated_at', sa.TIMESTAMP(), server_default=sa.text('now()'), nullable=True),
     sa.PrimaryKeyConstraint('id')
@@ -66,6 +68,7 @@ def upgrade():
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('interview_id', sa.Integer(), nullable=False),
     sa.Column('generated_text', sa.Text(), nullable=False),
+    sa.Column('source_dialogue', sa.Text(), nullable=True),
     sa.Column('created_at', sa.TIMESTAMP(), server_default=sa.text('now()'), nullable=True),
     sa.Column('updated_at', sa.TIMESTAMP(), server_default=sa.text('now()'), nullable=True),
     sa.ForeignKeyConstraint(['interview_id'], ['interviews.id'], ),
@@ -77,6 +80,7 @@ def upgrade():
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('interview_id', sa.Integer(), nullable=False),
     sa.Column('question_id', sa.Integer(), nullable=True),
+    sa.Column('speaker_role', sa.Enum('INTERVIEWER', 'CANDIDATE', 'SYSTEM', name='speakerrole'), nullable=False),
     sa.Column('question_text_snapshot', sa.Text(), nullable=True),
     sa.Column('full_dialogue_text', sa.Text(), nullable=False),
     sa.Column('order_num', sa.Integer(), nullable=True),

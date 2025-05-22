@@ -80,6 +80,16 @@ def show_candidate_management_page():
             help="支持 .txt, .pdf, .doc, .docx 格式的简历文件。"
         )
         
+        if uploaded_resume is not None:
+            st.write("调试信息：")
+            st.write(f"文件名 (uploaded_resume.name): {uploaded_resume.name}")
+            try:
+                file_value = uploaded_resume.getvalue()
+                st.write(f"文件内容长度 (uploaded_resume.getvalue()): {len(file_value)} bytes")
+                st.write("uploaded_resume.getvalue() 调用成功！")
+            except Exception as e:
+                st.write(f"调用 uploaded_resume.getvalue() 失败: {e}")
+        
         submit_button = st.form_submit_button("提交候选人信息")
 
         if submit_button:

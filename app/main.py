@@ -87,22 +87,14 @@ app.add_middleware(
     allow_headers=["*"]  # Allow all headers
 )
 
-# Mount static files directory
-# This should be AFTER the app instance is created and BEFORE any routes that might conflict.
-# The path "/static" means that files in the "static" directory will be accessible at "http://<host>:<port>/static/<filename>"
-# Ensure the 'static' directory exists at the root of your project if main.py is in 'app/'
-# and uvicorn is run from the root as 'uvicorn app.main:app'.
-# The path to the 'static' directory needs to be relative to where uvicorn is run.
-# If uvicorn is run from the project root:
-app.mount("/static", StaticFiles(directory="static"), name="static")
-
 # @app.on_event("startup") # This is now handled by lifespan
 # async def startup_event():
-#     create_tables_on_startup()
 
 app.include_router(jobs_router.router, prefix="/api/v1/jobs", tags=["Jobs"])
 app.include_router(candidates_router.router, prefix="/api/v1/candidates", tags=["Candidates"]) # Include candidates router
 app.include_router(interviews_router.router, prefix="/api/v1/interviews", tags=["Interviews"]) # Include interviews router
+
+# app.mount("/static", StaticFiles(directory="static"), name="static") # Commented out as per user confirmation
 
 @app.get("/ping", tags=["Health"])
 async def ping():
